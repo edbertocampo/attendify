@@ -2,23 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import clientPromise from '../../../../lib/mongodb';
 import { GridFSBucket, ObjectId } from 'mongodb';
 
-export async function GET(
-  req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function GET(req: NextRequest) {
   try {
+    const url = new URL(req.url);
+    const idStr = url.pathname.split('/').pop(); // get the last part of the path
+
+    if (!idStr) {
+      return NextResponse.json({ error: 'Missing file ID' }, { status: 400 });
+    }
+
     const client = await clientPromise;
     const db = client.db('attendify');
     const bucket = new GridFSBucket(db);
 
-    const id = new ObjectId(params.id);
+    const id = new ObjectId(idStr);
     const files = await bucket.find({ _id: id }).toArray();
-    
+
     if (!files.length) {
-      return NextResponse.json(
-        { error: 'File not found' },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: 'File not found' }, { status: 404 });
     }
 
     const stream = bucket.openDownloadStream(id);
@@ -31,7 +32,7 @@ export async function GET(
     });
 
     const file = files[0];
-    
+
     return new NextResponse(buffer, {
       headers: {
         'Content-Type': file.contentType || 'application/octet-stream',
