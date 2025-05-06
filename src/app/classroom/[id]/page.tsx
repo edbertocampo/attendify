@@ -443,8 +443,8 @@ const ClassroomPage = () => {
             color: "white"
           }}
         >
-          <Grid container spacing={2} alignItems="center">
-            <Grid item xs={12} md={6} component="div">
+          <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2 }}>
+            <Box sx={{ flex: 1 }}>
               <Typography variant="h4" fontWeight="700" gutterBottom>
                 {classroomName || "Unnamed Classroom"}
               </Typography>
@@ -465,27 +465,25 @@ const ClassroomPage = () => {
                   Copy
                 </Button>
               </Box>
-            </Grid>
-            <Grid item xs={12} md={6} component="div">
-              <Box sx={{ display: "flex", justifyContent: { xs: "flex-start", sm: "flex-end" }, mt: { xs: 2, sm: 0 } }}>
-                <Box sx={{ textAlign: "center", mr: 3 }}>
-                  <GroupIcon sx={{ fontSize: 32, mb: 0.5 }} />
-                  <Typography variant="h5" fontWeight="700">{students.length}</Typography>
-                  <Typography variant="body2">Total Students</Typography>
-                </Box>
-                <Box sx={{ textAlign: "center", mr: 3 }}>
-                  <CheckCircleIcon sx={{ fontSize: 32, mb: 0.5, color: "#8eff8e" }} />
-                  <Typography variant="h5" fontWeight="700" color="#8eff8e">{enrolledCount}</Typography>
-                  <Typography variant="body2">Enrolled</Typography>
-                </Box>
-                <Box sx={{ textAlign: "center" }}>
-                  <PersonIcon sx={{ fontSize: 32, mb: 0.5, color: "#ffcccb" }} />
-                  <Typography variant="h5" fontWeight="700" color="#ffcccb">{droppedCount}</Typography>
-                  <Typography variant="body2">Dropped</Typography>
-                </Box>
+            </Box>
+            <Box sx={{ display: "flex", justifyContent: { xs: "flex-start", sm: "flex-end" }, mt: { xs: 2, sm: 0 } }}>
+              <Box sx={{ textAlign: "center", mr: 3 }}>
+                <GroupIcon sx={{ fontSize: 32, mb: 0.5 }} />
+                <Typography variant="h5" fontWeight="700">{students.length}</Typography>
+                <Typography variant="body2">Total Students</Typography>
               </Box>
-            </Grid>
-          </Grid>
+              <Box sx={{ textAlign: "center", mr: 3 }}>
+                <CheckCircleIcon sx={{ fontSize: 32, mb: 0.5, color: "#8eff8e" }} />
+                <Typography variant="h5" fontWeight="700" color="#8eff8e">{enrolledCount}</Typography>
+                <Typography variant="body2">Enrolled</Typography>
+              </Box>
+              <Box sx={{ textAlign: "center" }}>
+                <PersonIcon sx={{ fontSize: 32, mb: 0.5, color: "#ffcccb" }} />
+                <Typography variant="h5" fontWeight="700" color="#ffcccb">{droppedCount}</Typography>
+                <Typography variant="body2">Dropped</Typography>
+              </Box>
+            </Box>
+          </Box>
           
           {/* Quick Action Buttons */}
           <Box sx={{ display: 'flex', gap: 2, mt: 3, flexWrap: 'wrap' }}>
