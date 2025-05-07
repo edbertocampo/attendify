@@ -4,13 +4,17 @@ import { GridFSBucket } from 'mongodb';
 import { Readable } from 'stream';
 
 export async function POST(req: NextRequest) {
+  console.log('[API] /api/upload called');
   try {
     const formData = await req.formData();
     const file = formData.get('image') as File;
     const classCode = formData.get('classCode') as string;
     const type = formData.get('type') as string;
 
+    console.log('[API] Form data:', { hasFile: !!file, classCode, type });
+
     if (!file || !classCode || !type) {
+      console.error('[API] Missing required fields', { hasFile: !!file, classCode, type });
       return new NextResponse(
         JSON.stringify({ error: 'Missing required fields' }),
         {
@@ -45,8 +49,14 @@ export async function POST(req: NextRequest) {
     await new Promise<void>((resolve, reject) => {
       readable
         .pipe(uploadStream)
-        .on('error', reject)
-        .on('finish', resolve);
+        .on('error', (err) => {
+          console.error('[API] Upload stream error:', err);
+          reject(err);
+        })
+        .on('finish', () => {
+          console.log('[API] File uploaded to MongoDB', uploadStream.id);
+          resolve();
+        });
     });
 
     return new NextResponse(
@@ -61,7 +71,7 @@ export async function POST(req: NextRequest) {
     );
 
   } catch (error) {
-    console.error('Upload error:', error);
+    console.error('[API] Upload error:', error);
     return new NextResponse(
       JSON.stringify({ 
         success: false,
