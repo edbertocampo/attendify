@@ -469,34 +469,43 @@ const ClassroomPage = () => {
           message: 'Checking attendance time...'
         });
 
-        const schedule = classData.schedule;
-        if (!schedule || !schedule.startTime24 || !schedule.endTime24) {
+        // --- MULTI-SESSION SUPPORT ---
+        const sessions = classData.sessions || [];
+        const daysOfWeek = [
+          'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
+        ];
+        const todayDay = daysOfWeek[now.getDay()];
+        const todaySession = sessions.find((session: any) => session.day === todayDay);
+
+        if (!todaySession) {
           setSubmitStatus({
             type: 'error',
-            message: 'No schedule has been set for this class. Please contact your instructor.'
+            message: 'No session scheduled for today. Attendance cannot be submitted.'
           });
           return;
         }
 
-        const [startHour, startMinute] = schedule.startTime24.split(':').map(Number);
-        const [endHour, endMinute] = schedule.endTime24.split(':').map(Number);
-        
-        const classStartTime = new Date();
-        classStartTime.setHours(startHour, startMinute, 0);
-        
-        const classEndTime = new Date();
-        classEndTime.setHours(endHour, endMinute, 0);
-        
+        // Parse session start and end times (assume "HH:mm" 24-hour format)
+        const [startHour, startMinute] = todaySession.startTime.split(':').map(Number);
+        const [endHour, endMinute] = todaySession.endTime.split(':').map(Number);
+
+        const classStartTime = new Date(now);
+        classStartTime.setHours(startHour, startMinute, 0, 0);
+
+        const classEndTime = new Date(now);
+        classEndTime.setHours(endHour, endMinute, 0, 0);
+
         graceEndTime = new Date(classStartTime.getTime() + 15 * 60000); // Add 15 minutes
 
         // Check if outside class hours for attendance submission
         if (now < classStartTime || now > classEndTime) {
           setSubmitStatus({
             type: 'error',
-            message: `Attendance can only be submitted between ${schedule.startTime} - ${schedule.endTime}`
+            message: `Attendance can only be submitted between ${todaySession.startTime} - ${todaySession.endTime}`
           });
           return;
         }
+        // --- END MULTI-SESSION SUPPORT ---
       }
 
       // Determine attendance status
@@ -656,7 +665,7 @@ const ClassroomPage = () => {
             {submitStatus.type && (
               <Box sx={{ mb: 3 }}>
                 <Alert 
-                  severity={submitStatus.type}
+                  severity={submitStatus.type || 'info'}
                   iconMapping={{
                     success: <span role="img" aria-label="success">✅</span>,
                     error: <span role="img" aria-label="error">❌</span>,
@@ -918,7 +927,7 @@ const ClassroomPage = () => {
           anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
         >
           <Alert
-            severity={submitStatus.type}
+            severity={submitStatus.type || 'info'}
             iconMapping={{
               success: <span role="img" aria-label="success">✅</span>,
               error: <span role="img" aria-label="error">❌</span>,
