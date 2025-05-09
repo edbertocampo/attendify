@@ -910,28 +910,27 @@ const ClassroomPage = () => {
       )}
 
       {/* Snackbar */}
-      <Snackbar
-        open={snackbarOpen && !!submitStatus.type}
-        autoHideDuration={4000}
-        onClose={handleSnackbarClose}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-        children={
-          submitStatus.type ? (
-            <Alert
-              severity={submitStatus.type}
-              iconMapping={{
-                success: <span role="img" aria-label="success">✅</span>,
-                error: <span role="img" aria-label="error">❌</span>,
-                info: <span role="img" aria-label="info">ℹ️</span>
-              }}
-              onClose={handleSnackbarClose}
-              sx={{ fontSize: '1rem', alignItems: 'center', minWidth: 320 }}
-            >
-              {submitStatus.message}
-            </Alert>
-          ) : undefined
-        }
-      />
+      {(snackbarOpen && !!submitStatus.type) && (
+        <Snackbar
+          open={snackbarOpen}
+          autoHideDuration={4000}
+          onClose={handleSnackbarClose}
+          anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        >
+          <Alert
+            severity={submitStatus.type}
+            iconMapping={{
+              success: <span role="img" aria-label="success">✅</span>,
+              error: <span role="img" aria-label="error">❌</span>,
+              info: <span role="img" aria-label="info">ℹ️</span>
+            }}
+            onClose={handleSnackbarClose}
+            sx={{ fontSize: '1rem', alignItems: 'center', minWidth: 320 }}
+          >
+            {submitStatus.message}
+          </Alert>
+        </Snackbar>
+      )}
     </Box>
   );
 };
