@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Box, Paper, Typography, Button, TextField, AppBar, Toolbar, IconButton, Grid, Container, Modal, Backdrop, FormControl, InputLabel } from "@mui/material";
+import { Box, Paper, Typography, Button, TextField, AppBar, Toolbar, IconButton, Grid, Container, Modal, Backdrop, FormControl, InputLabel, CircularProgress } from "@mui/material";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../../lib/firebase";
 import { signOut, onAuthStateChanged } from "firebase/auth";
@@ -41,8 +41,6 @@ export default function InstructorDashboard() {
   const [classrooms, setClassrooms] = useState<any[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
   const [openForm, setOpenForm] = useState(false);
-  const [startTime, setStartTime] = useState("");
-  const [endTime, setEndTime] = useState("");
   const [pendingRequests, setPendingRequests] = useState(0);
   const [isClient, setIsClient] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -58,6 +56,11 @@ export default function InstructorDashboard() {
   // Add state variables for edit functionality
   const [editMode, setEditMode] = useState(false);
   const [currentClassroomId, setCurrentClassroomId] = useState<string | null>(null);
+  // Add state for selected days of the week
+  const [sessions, setSessions] = useState([
+    { day: '', startTime: '', endTime: '' }
+  ]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Add this useEffect to handle client-side initialization
   useEffect(() => {
@@ -311,6 +314,21 @@ export default function InstructorDashboard() {
     return null;
   };
 
+  // Add this helper for day selection
+  const daysOfWeek = [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'
+  ];
+
+  const handleSessionChange = (idx: number, field: string, value: string) => {
+    setSessions((prev) => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s));
+  };
+  const handleAddSession = () => {
+    setSessions((prev) => [...prev, { day: '', startTime: '', endTime: '' }]);
+  };
+  const handleRemoveSession = (idx: number) => {
+    setSessions((prev) => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev);
+  };
+
   // Handle Classroom Creation/Update
   const handleCreateClassroom = async () => {
     // Reset error state
@@ -322,37 +340,30 @@ export default function InstructorDashboard() {
       return;
     }
   
-    if (!startTime) {
-      setError("Start time is required.");
-      return;
+    // Validate sessions
+    for (const [i, session] of sessions.entries()) {
+      if (!session.day || !session.startTime || !session.endTime) {
+        setError(`Session ${i + 1}: All fields are required.`);
+        return;
+      }
+      const start24 = convertTo24Hour(session.startTime);
+      const end24 = convertTo24Hour(session.endTime);
+      if (!start24 || !end24) {
+        setError(`Session ${i + 1}: Invalid time format.`);
+        return;
+      }
+      const [sh, sm] = start24.split(':').map(Number);
+      const [eh, em] = end24.split(':').map(Number);
+      if (sh > eh || (sh === eh && sm >= em)) {
+        setError(`Session ${i + 1}: End time must be after start time.`);
+        return;
+      }
     }
-  
-    if (!endTime) {
-      setError("End time is required.");
-      return;
-    }
-  
-    // Convert times to 24-hour format
-    const start24 = convertTo24Hour(startTime);
-    const end24 = convertTo24Hour(endTime);
-  
-    if (!start24 || !end24) {
-      setError("Please enter valid times (e.g., 9:00 AM, 2:30 PM)");
-      return;
-    }
-  
-    // Compare times
-    const [startHour, startMinute] = start24.split(':').map(Number);
-    const [endHour, endMinute] = end24.split(':').map(Number);
-    
-    if (startHour > endHour || (startHour === endHour && startMinute >= endMinute)) {
-      setError("End time must be after start time.");
-      return;
-    }
-  
+    setIsSubmitting(true);
     try {
       if (!userId) {
         setError("User ID is missing. Please log in again.");
+        setIsSubmitting(false);
         return;
       }
   
@@ -361,12 +372,13 @@ export default function InstructorDashboard() {
         name: classroomName,
         description: description,
         isArchived: false,
-        schedule: {
-          startTime: startTime.toUpperCase(), // Store the original 12-hour format
-          endTime: endTime.toUpperCase(),
-          startTime24: start24, // Store 24-hour format for calculations
-          endTime24: end24
-        }
+        sessions: sessions.map(s => ({
+          day: s.day,
+          startTime: s.startTime,
+          endTime: s.endTime,
+          startTime24: convertTo24Hour(s.startTime),
+          endTime24: convertTo24Hour(s.endTime)
+        }))
       };
   
       // Check if we're in edit mode or create mode
@@ -388,8 +400,7 @@ export default function InstructorDashboard() {
       // Reset form and states
       setClassroomName("");
       setDescription("");
-      setStartTime("");
-      setEndTime("");
+      setSessions([{ day: '', startTime: '', endTime: '' }]);
       setError(null);
       setOpenForm(false);
       setIsModalOpen(false);
@@ -401,6 +412,8 @@ export default function InstructorDashboard() {
     } catch (error) {
       console.error("Error with classroom:", error);
       setError(`Failed to ${editMode ? 'update' : 'create'} classroom. Please try again.`);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -411,8 +424,7 @@ export default function InstructorDashboard() {
     setCurrentClassroomId(null);
     setClassroomName("");
     setDescription("");
-    setStartTime("");
-    setEndTime("");
+    setSessions([{ day: '', startTime: '', endTime: '' }]);
     setIsModalOpen(true);
     setOpenForm(true);
   };
@@ -429,15 +441,15 @@ export default function InstructorDashboard() {
         sx={{
           display: 'flex',
           minHeight: '100vh',
-          bgcolor: '#f8fafc'
+          bgcolor: '#f4f7fd' // changed from '#f8fafc' for a subtle blue-tinted background
         }}
       >
         {/* Sidebar */}
         <Box
           sx={{
             width: { xs: '70px', md: '240px' },
-            borderRight: '1px solid rgba(0,0,0,0.08)',
-            bgcolor: 'white',
+            borderRight: '1px solid #e3e8f7', // blue-tinted border
+            bgcolor: '#fff',
             position: 'fixed',
             height: '100vh',
             display: 'flex',
@@ -451,7 +463,7 @@ export default function InstructorDashboard() {
               sx={{
                 fontSize: '1.5rem',
                 fontWeight: 600,
-                color: '#0066cc',
+                color: '#334eac', // theme primary
                 display: { xs: 'none', md: 'block' }
               }}
             >
@@ -461,7 +473,7 @@ export default function InstructorDashboard() {
               sx={{
                 fontSize: '1.5rem',
                 fontWeight: 600,
-                color: '#0066cc',
+                color: '#334eac',
                 display: { xs: 'block', md: 'none' }
               }}
             >
@@ -475,14 +487,14 @@ export default function InstructorDashboard() {
               startIcon={<HomeIcon />}
               sx={{
                 justifyContent: 'flex-start',
-                color: '#0066cc',
-                bgcolor: 'rgba(0,102,204,0.08)',
+                color: '#334eac',
+                bgcolor: 'rgba(51, 78, 172, 0.08)',
                 borderRadius: '10px',
                 py: { xs: 1, md: 1.5 },
                 px: { xs: 1.5, md: 2 },
                 minWidth: 0,
                 width: '100%',
-                '&:hover': { bgcolor: 'rgba(0,102,204,0.12)' },
+                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.12)' },
                 '& .MuiButton-startIcon': { 
                   margin: 0,
                   mr: { xs: 0, md: 2 },
@@ -511,7 +523,7 @@ export default function InstructorDashboard() {
                 px: { xs: 1.5, md: 2 },
                 minWidth: 0,
                 width: '100%',
-                '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
+                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
                 '& .MuiButton-startIcon': { 
                   margin: 0,
                   mr: { xs: 0, md: 2 },
@@ -540,7 +552,7 @@ export default function InstructorDashboard() {
                 px: { xs: 1.5, md: 2 },
                 minWidth: 0,
                 width: '100%',
-                '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
+                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
                 '& .MuiButton-startIcon': { 
                   margin: 0,
                   mr: { xs: 0, md: 2 },
@@ -570,7 +582,7 @@ export default function InstructorDashboard() {
                   px: { xs: 1.5, md: 2 },
                   minWidth: 0,
                   width: '100%',
-                  '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
+                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
                   '& .MuiButton-startIcon': { 
                     margin: 0,
                     mr: { xs: 0, md: 2 },
@@ -599,7 +611,7 @@ export default function InstructorDashboard() {
                   px: { xs: 1.5, md: 2 },
                   minWidth: 0,
                   width: '100%',
-                  '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
+                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
                   '& .MuiButton-startIcon': { 
                     margin: 0,
                     mr: { xs: 0, md: 2 },
@@ -823,8 +835,7 @@ export default function InstructorDashboard() {
                               setCurrentClassroomId(classroom.id);
                               setClassroomName(classroom.name);
                               setDescription(classroom.description || "");
-                              setStartTime(classroom.schedule?.startTime || "");
-                              setEndTime(classroom.schedule?.endTime || "");
+                              setSessions(classroom.sessions || [{ day: '', startTime: '', endTime: '' }]);
                               setOpenForm(true);
                               setIsModalOpen(true);
                             }}
@@ -878,14 +889,14 @@ export default function InstructorDashboard() {
                         <Typography
                           variant="body2"
                           sx={{
-                            color: '#06c',
+                            color: '#334eac', // schedule time color
                             mb: 2,
                             lineHeight: 1.4,
                             fontSize: { xs: '0.875rem', sm: '0.875rem' },
                             fontWeight: 500
                           }}
                         >
-                          {classroom.schedule ? `${classroom.schedule.startTime} - ${classroom.schedule.endTime}` : 'No schedule set'}
+                          {classroom.sessions ? classroom.sessions.map((session: any) => `${session.day}: ${session.startTime} - ${session.endTime}`).join(', ') : 'No schedule set'}
                         </Typography>
                         <Box 
                           sx={{ 
@@ -913,11 +924,11 @@ export default function InstructorDashboard() {
                             variant="text"
                             sx={{
                               textTransform: "none",
-                              color: '#06c',
+                              color: '#334eac',
                               minWidth: 'auto',
                               p: 1,
                               '&:hover': {
-                                bgcolor: 'rgba(0,102,204,0.08)'
+                                bgcolor: 'rgba(51, 78, 172, 0.08)'
                               }
                             }}
                           >
@@ -940,14 +951,14 @@ export default function InstructorDashboard() {
                 position: "fixed",
                 bottom: { xs: 24, sm: 32 },
                 right: { xs: 24, sm: 32 },
-                bgcolor: '#06c',
+                bgcolor: '#334eac',
                 color: "white",
                 width: { xs: 48, sm: 56 },
                 height: { xs: 48, sm: 56 },
                 transition: "all 0.2s ease",
-                boxShadow: '0 4px 14px rgba(0,0,0,0.15)',
+                boxShadow: '0 4px 14px rgba(51,78,172,0.15)',
                 '&:hover': {
-                  bgcolor: '#0055b3',
+                  bgcolor: '#22357a',
                   transform: 'scale(1.05)'
                 }
               }}
@@ -1056,35 +1067,41 @@ export default function InstructorDashboard() {
                 }}
               />
 
-              <Box sx={{ 
-                display: 'flex', 
-                gap: 2, 
-                mb: 3,
-                flexDirection: { xs: 'column', sm: 'row' }
-              }}>
-                <FormControl fullWidth sx={{ mb: 2 }}>
-                  <TextField
-                    required
-                    label="Start Time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    placeholder="e.g., 9:00 AM"
-                    helperText="Enter time in 12-hour format (e.g., 9:00 AM)"
-                    fullWidth
-                  />
-                </FormControl>
-
-                <FormControl fullWidth sx={{ mb: 2 }}>
-                  <TextField
-                    required
-                    label="End Time"
-                    value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
-                    placeholder="e.g., 10:00 AM"
-                    helperText="Enter time in 12-hour format (e.g., 10:00 AM)"
-                    fullWidth
-                  />
-                </FormControl>
+              <Box sx={{ mb: 3 }}>
+                <Typography sx={{ mb: 1, fontWeight: 500 }}>Sessions</Typography>
+                {sessions.map((session, idx) => (
+                  <Box key={idx} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
+                    <FormControl sx={{ minWidth: 110 }}>
+                      <InputLabel></InputLabel>
+                      <TextField
+                        select
+                        //label="Day"
+                        value={session.day}
+                        onChange={e => handleSessionChange(idx, 'day', e.target.value)}
+                        SelectProps={{ native: true }}
+                      >
+                        {session.day === '' && <option value="">Select a day</option>}
+                        {daysOfWeek.map(day => <option key={day} value={day}>{day}</option>)}
+                      </TextField>
+                    </FormControl>
+                    <TextField
+                      label="Start Time"
+                      value={session.startTime}
+                      onChange={e => handleSessionChange(idx, 'startTime', e.target.value)}
+                      placeholder="e.g., 9:00 AM"
+                      sx={{ minWidth: 110 }}
+                    />
+                    <TextField
+                      label="End Time"
+                      value={session.endTime}
+                      onChange={e => handleSessionChange(idx, 'endTime', e.target.value)}
+                      placeholder="e.g., 10:00 AM"
+                      sx={{ minWidth: 110 }}
+                    />
+                    <Button onClick={() => handleRemoveSession(idx)} disabled={sessions.length === 1} color="error">Remove</Button>
+                  </Box>
+                ))}
+                <Button onClick={handleAddSession} sx={{ mt: 1 }}>Add Session</Button>
               </Box>
     
               <Box 
@@ -1099,17 +1116,19 @@ export default function InstructorDashboard() {
                   variant="contained"
                   fullWidth={true}
                   onClick={handleCreateClassroom}
+                  disabled={isSubmitting}
                   sx={{
                     textTransform: "none",
-                    bgcolor: '#06c',
+                    bgcolor: '#334eac',
                     borderRadius: { xs: '10px', sm: '12px' },
                     py: { xs: 1.5, sm: 1 },
                     order: { xs: 1, sm: 0 },
                     '&:hover': {
-                      bgcolor: '#0055b3'
+                      bgcolor: '#22357a'
                     }
                   }}
                 >
+                  {isSubmitting ? <CircularProgress size={24} color="inherit" sx={{ mr: 1 }} /> : null}
                   {editMode ? 'Update' : 'Create'}
                 </Button>
                 <Button

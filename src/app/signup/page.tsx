@@ -9,7 +9,6 @@ import Link from "next/link";
 import { auth, db } from "@/lib/firebase";
 import { doc, setDoc, updateDoc } from "firebase/firestore";
 import { Visibility, VisibilityOff } from "@mui/icons-material";
-import LoadingOverlay from "@/components/LoadingOverlay";
 
 export default function SignupPage() {
   const [fullName, setFullName] = useState("");
@@ -105,37 +104,35 @@ export default function SignupPage() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "linear-gradient(145deg, #f6f9fc 0%, #ffffff 100%)",
+        background: "linear-gradient(145deg, #eaf0fb 0%, #f6f9fc 100%)", // blue-tinted background
         padding: { xs: 2, sm: 4 },
       }}
     >
-      <LoadingOverlay isLoading={loading} message="Creating your account..." />
-      
       <Container maxWidth="sm">
         <Paper
           elevation={0}
           sx={{
             p: { xs: 3, sm: 4 },
-            bgcolor: "rgba(255, 255, 255, 0.9)",
+            bgcolor: "rgba(255, 255, 255, 0.96)",
             backdropFilter: "blur(10px)",
             color: "text.primary",
             borderRadius: "24px",
             textAlign: "center",
-            border: "1px solid rgba(0, 0, 0, 0.05)",
+            border: "1px solid #dbeafe", // blue-tinted border
             transition: "all 0.3s ease",
           }}
         >
           <Image
-            src="/attendify.png"
-            alt="App Logo"
-            width={80}
-            height={80}
+            src="/attendify.svg"
+            alt="Attendify Logo"
+            width={100}
+            height={100}
             priority
             style={{
               width: "auto",
               height: "auto",
-              maxWidth: "80px",
-              maxHeight: "80px",
+              maxWidth: "150px",
+              maxHeight: "150px",
               marginBottom: "24px",
               animation: "fadeIn 0.6s ease-out",
             }}
@@ -148,7 +145,7 @@ export default function SignupPage() {
               fontWeight: 700,
               fontSize: { xs: "24px", sm: "28px" },
               mb: 1,
-              background: "linear-gradient(90deg, #007AFF 0%, #005ECF 100%)",
+              background: "linear-gradient(90deg, #334eac 0%, #22357a 100%)", // theme gradient
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
             }}
@@ -194,7 +191,7 @@ export default function SignupPage() {
             sx={{
               mb: 4,
               borderRadius: "16px",
-              bgcolor: "rgba(0, 0, 0, 0.02)",
+              bgcolor: "rgba(51, 78, 172, 0.06)", // blue-tinted
               padding: "4px",
               "& .MuiTabs-indicator": { display: "none" },
               "& .MuiTab-root": {
@@ -206,9 +203,9 @@ export default function SignupPage() {
                 color: loading ? "rgba(0, 0, 0, 0.3)" : "rgba(0, 0, 0, 0.6)",
                 minHeight: "44px",
                 "&.Mui-selected": {
-                  bgcolor: "#007AFF",
+                  bgcolor: "#334eac",
                   color: "white",
-                  boxShadow: "0 4px 12px rgba(0, 122, 255, 0.2)",
+                  boxShadow: "0 4px 12px rgba(51, 78, 172, 0.18)",
                 },
               },
             }}
@@ -242,14 +239,14 @@ export default function SignupPage() {
                   sx={{
                     '& .MuiOutlinedInput-root': {
                       borderRadius: '12px',
-                      bgcolor: 'rgba(0, 0, 0, 0.02)',
+                      bgcolor: 'rgba(51, 78, 172, 0.04)', // blue-tinted
                       transition: 'all 0.2s ease',
                       '&:hover': {
-                        bgcolor: 'rgba(0, 0, 0, 0.03)',
+                        bgcolor: 'rgba(51, 78, 172, 0.07)',
                       },
                       '&.Mui-focused': {
                         bgcolor: 'white',
-                        boxShadow: '0 0 0 2px rgba(0, 122, 255, 0.2)',
+                        boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
                       }
                     }
                   }}
@@ -265,14 +262,14 @@ export default function SignupPage() {
                   sx={{
                     '& .MuiOutlinedInput-root': {
                       borderRadius: '12px',
-                      bgcolor: 'rgba(0, 0, 0, 0.02)',
+                      bgcolor: 'rgba(51, 78, 172, 0.04)',
                       transition: 'all 0.2s ease',
                       '&:hover': {
-                        bgcolor: 'rgba(0, 0, 0, 0.03)',
+                        bgcolor: 'rgba(51, 78, 172, 0.07)',
                       },
                       '&.Mui-focused': {
                         bgcolor: 'white',
-                        boxShadow: '0 0 0 2px rgba(0, 122, 255, 0.2)',
+                        boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
                       }
                     }
                   }}
@@ -293,14 +290,14 @@ export default function SignupPage() {
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: '12px',
-                  bgcolor: 'rgba(0, 0, 0, 0.02)',
+                  bgcolor: 'rgba(51, 78, 172, 0.04)',
                   transition: 'all 0.2s ease',
                   '&:hover': {
-                    bgcolor: 'rgba(0, 0, 0, 0.03)',
+                    bgcolor: 'rgba(51, 78, 172, 0.07)',
                   },
                   '&.Mui-focused': {
                     bgcolor: 'white',
-                    boxShadow: '0 0 0 2px rgba(0, 122, 255, 0.2)',
+                    boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
                   }
                 }
               }}
@@ -327,7 +324,7 @@ export default function SignupPage() {
                         color: 'rgba(0, 0, 0, 0.54)',
                         transition: 'color 0.2s ease',
                         '&:hover': {
-                          color: '#007AFF',
+                          color: '#334eac',
                         },
                       }}
                     >
@@ -339,14 +336,14 @@ export default function SignupPage() {
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: '12px',
-                  bgcolor: 'rgba(0, 0, 0, 0.02)',
+                  bgcolor: 'rgba(51, 78, 172, 0.04)',
                   transition: 'all 0.2s ease',
                   '&:hover': {
-                    bgcolor: 'rgba(0, 0, 0, 0.03)',
+                    bgcolor: 'rgba(51, 78, 172, 0.07)',
                   },
                   '&.Mui-focused': {
                     bgcolor: 'white',
-                    boxShadow: '0 0 0 2px rgba(0, 122, 255, 0.2)',
+                    boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
                   }
                 }
               }}
@@ -373,7 +370,7 @@ export default function SignupPage() {
                         color: 'rgba(0, 0, 0, 0.54)',
                         transition: 'color 0.2s ease',
                         '&:hover': {
-                          color: '#007AFF',
+                          color: '#334eac',
                         },
                       }}
                     >
@@ -385,14 +382,14 @@ export default function SignupPage() {
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: '12px',
-                  bgcolor: 'rgba(0, 0, 0, 0.02)',
+                  bgcolor: 'rgba(51, 78, 172, 0.04)',
                   transition: 'all 0.2s ease',
                   '&:hover': {
-                    bgcolor: 'rgba(0, 0, 0, 0.03)',
+                    bgcolor: 'rgba(51, 78, 172, 0.07)',
                   },
                   '&.Mui-focused': {
                     bgcolor: 'white',
-                    boxShadow: '0 0 0 2px rgba(0, 122, 255, 0.2)',
+                    boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
                   }
                 }
               }}
@@ -410,11 +407,11 @@ export default function SignupPage() {
                 borderRadius: "14px",
                 height: "52px",
                 fontSize: "16px",
-                background: "linear-gradient(90deg, #007AFF 0%, #005ECF 100%)",
-                boxShadow: "0 4px 12px rgba(0, 122, 255, 0.2)",
+                background: "linear-gradient(90deg, #334eac 0%, #22357a 100%)",
+                boxShadow: "0 4px 12px rgba(51, 78, 172, 0.18)",
                 "&:hover": {
-                  background: "linear-gradient(90deg, #0066FF 0%, #004CBF 100%)",
-                  boxShadow: "0 6px 16px rgba(0, 122, 255, 0.3)",
+                  background: "linear-gradient(90deg, #22357a 0%, #334eac 100%)",
+                  boxShadow: "0 6px 16px rgba(51, 78, 172, 0.28)",
                 },
                 transition: "all 0.3s ease",
               }}
@@ -441,11 +438,13 @@ export default function SignupPage() {
               <Link 
                 href="/login" 
                 style={{ 
-                  color: "#007AFF", 
+                  color: "#334eac", 
                   fontWeight: 600, 
                   textDecoration: "none",
                   transition: "color 0.2s ease" 
                 }}
+                onMouseOver={e => (e.currentTarget.style.color = '#22357a')}
+                onMouseOut={e => (e.currentTarget.style.color = '#334eac')}
               >
                 Sign in
               </Link>

@@ -229,6 +229,7 @@ const CameraModal = ({ open, onClose, onCapture, classCode }: CameraModalProps) 
             </>
           ) : (
             <>
+              {/*
               <Button 
                 variant="outlined" 
                 onClick={() => {
@@ -240,6 +241,7 @@ const CameraModal = ({ open, onClose, onCapture, classCode }: CameraModalProps) 
               >
                 {useFrontCamera ? 'Use Back Camera' : 'Use Front Camera'}
               </Button>
+              */}
               <Button 
                 variant="outlined" 
                 onClick={() => {

@@ -40,6 +40,7 @@ interface Student {
   lastAttendance?: string;
   profileImage?: string;
   attendancePercentage?: number;
+  absenceCount?: number;
   selected?: boolean;
 }
 
@@ -139,6 +140,9 @@ const ClassroomPage = () => {
             ? (studentAttendance.filter(record => record.present).length / studentAttendance.length) * 100
             : 0;
           
+          // Count absences (present === false)
+          const absenceCount = studentAttendance.filter(record => record.present === false).length;
+          
           // Get user information using studentId which maps to user's id
           const userData = usersMap.get(studentData.studentId);
           
@@ -150,6 +154,7 @@ const ClassroomPage = () => {
             lastAttendance: studentData.lastAttendance || "",
             profileImage: studentData.profileImage || "",
             attendancePercentage: Math.round(attendancePercentage),
+            absenceCount, // <-- add absence count
             selected: false
           };
         });
@@ -696,6 +701,17 @@ const ClassroomPage = () => {
                           <Box>
                             <Typography variant="body1" fontWeight="500">
                               {student.fullName}
+                              {/* Absence warning */}
+                              {(student.absenceCount ?? 0) === 2 && (
+                                <Tooltip title="Close to 3 absences!">
+                                  <Chip label="⚠️ 2 absences" color="warning" size="small" sx={{ ml: 1 }} />
+                                </Tooltip>
+                              )}
+                              {(student.absenceCount ?? 0) >= 3 && (
+                                <Tooltip title="3 or more absences!">
+                                  <Chip label="❗ 3+ absences" color="error" size="small" sx={{ ml: 1 }} />
+                                </Tooltip>
+                              )}
                             </Typography>
                             {isMobile && student.email && (
                               <Typography variant="caption" color="text.secondary">
