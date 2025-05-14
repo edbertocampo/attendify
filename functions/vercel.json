@@ -1,3 +1,13 @@
+
+
 {
-  "ignore": ["functions"]
+  "crons": [
+    {
+      "path": "/api/autoMarkAbsents",
+      "schedule": "*/15 * * * *", 
+      "headers": {
+        "Authorization": "Bearer ${CRON_SECRET}"
+      }
+    }
+  ]
 }

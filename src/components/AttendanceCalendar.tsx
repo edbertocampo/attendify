@@ -31,12 +31,74 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
   const [isLocating, setIsLocating] = useState(false);
   const daysInMonth = getDaysInMonth(year, month);
   const today = new Date();
-
+  
+  // Create local state for entries that might need URL fixing
+  const [fixedEntries, setFixedEntries] = useState<AttendanceEntry[]>(entries);
+  
   // Map entries by date for quick lookup
   const entryMap = React.useMemo(() => {
     const map: Record<string, AttendanceEntry> = {};
-    entries.forEach(e => { map[e.date] = e; });
+    fixedEntries.forEach(e => { map[e.date] = e; });
     return map;
+  }, [fixedEntries]);
+  
+  // Fix relative URLs by ensuring they have the origin prefix
+  React.useEffect(() => {
+    if (typeof window === 'undefined') return; // Only run on client side
+    
+    console.log('Calendar entries before fixing:', entries);
+    console.log('File entries:', entries.filter(e => e.type === 'file'));
+    
+    // Check each entry and make sure file URLs are absolute
+    const newFixedEntries = entries.map(entry => {
+      // Handle file URLs consistently
+      if (entry.type === 'file' && typeof entry.url === 'string') {
+        console.log(`Processing file entry: ${entry.date}, URL: ${entry.url}, fileName: ${entry.fileName || 'unnamed'}`);
+        
+        // If empty URL, skip processing
+        if (!entry.url) {
+          console.log('Empty URL found, skipping:', entry);
+          return entry;
+        }
+        
+        // For relative paths that need to be made absolute
+        if (entry.url.startsWith('/')) {
+          // Check if this is an API route to MongoDB or a Firebase Storage URL
+          console.log(`Fixing URL: ${entry.url} to ${window.location.origin}${entry.url}`);
+          return {
+            ...entry,
+            url: `${window.location.origin}${entry.url}`
+          };
+        }
+        
+        // For Firebase storage URLs that don't start with http
+        if (!entry.url.startsWith('http') && !entry.url.startsWith('/')) {
+          // This could be a Firebase storage URL that needs to be handled differently
+          console.log(`Fixing potential Firebase URL: ${entry.url}`);
+          // If it's a MongoDB ID directly, transform it to the API route
+          if (entry.url.match(/^[0-9a-f]{24}$/)) {
+            const apiUrl = `/api/files/${entry.url}`;
+            console.log(`Detected MongoDB ID, converting to API route: ${apiUrl}`);
+            return {
+              ...entry,
+              url: `${window.location.origin}${apiUrl}`
+            };
+          }
+          return entry;
+        }
+      }
+      return entry;
+    });
+    
+    // Update our local state with fixed entries
+    setFixedEntries(newFixedEntries);
+    console.log('Calendar entries after fixing:', newFixedEntries);
+    
+    // Log the entry map for debugging
+    setTimeout(() => {
+      console.log('EntryMap keys:', Object.keys(entryMap));
+      console.log('Fixed entries dates:', newFixedEntries.map(e => e.date));
+    }, 500);
   }, [entries]);
 
   // Generate calendar grid (start on Sunday)
@@ -48,7 +110,6 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
   for (let d = 1; d <= daysInMonth; d++) {
     calendarCells.push(d);
   }
-
   // Navigation handlers
   const handlePrevMonth = () => {
     if (month === 1) {
@@ -69,6 +130,15 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
 
   // Modal content helpers
   const selectedEntry = selectedDate ? entryMap[selectedDate] : null;
+  
+  // Log the selected entry when it changes for debugging
+  React.useEffect(() => {
+    if (selectedEntry) {
+      console.log('Selected entry:', selectedEntry);
+      console.log('Entry type:', selectedEntry.type);
+      console.log('Entry URL:', selectedEntry.url);
+    }
+  }, [selectedEntry]);
 
   // Fetch place name when modal opens and geolocation is present
   React.useEffect(() => {
@@ -117,8 +187,7 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
           }}
         >
           {'<'}
-        </IconButton>
-        <Typography variant="h6" sx={{ flex: 1, textAlign: 'center' }}>
+        </IconButton>        <Typography variant="h6" sx={{ flex: 1, textAlign: 'center', color: '#334eac', fontWeight: 600 }}>
           {new Date(year, month - 1).toLocaleString('default', { month: 'long', year: 'numeric' })}
         </Typography>
         <IconButton
@@ -310,14 +379,33 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
                   <Typography variant="body2" sx={{ mb: 1 }}>
                     {selectedEntry.fileName || 'File'}
                   </Typography>
-                  <a
-                    href={selectedEntry.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: '#334eac', fontWeight: 600 }}
-                  >
-                    Open File
-                  </a>
+                  {/* Only render the link if we have a valid URL */}
+                  {selectedEntry.url && (
+                    <a
+                      href={
+                        // Ensure URL is absolute by adding origin if needed
+                        typeof selectedEntry.url === 'string' && selectedEntry.url.startsWith('/') && typeof window !== 'undefined'
+                          ? `${window.location.origin}${selectedEntry.url}`
+                          : selectedEntry.url
+                      }
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{ color: '#334eac', fontWeight: 600 }}
+                      onClick={(e) => {
+                        // Log the URL being opened for debugging
+                        console.log('Opening file URL:', selectedEntry.url);
+                        
+                        // For Firebase Storage URLs, prevent default and fetch via API if needed
+                        if (typeof selectedEntry.url === 'string' && 
+                            !selectedEntry.url.startsWith('http') && 
+                            !selectedEntry.url.startsWith('/')) {
+                          console.log('This appears to be a Firebase Storage URL, might need special handling');
+                        }
+                      }}
+                    >
+                      Open File
+                    </a>
+                  )}
                 </Box>
               )}
             </Box>

@@ -26,8 +26,7 @@ const LoadingOverlay: React.FC<LoadingOverlayProps> = ({ isLoading, message = 'L
         zIndex: 9999,
       }}
     >
-      <CircularProgress size={60} sx={{ color: '#1976d2' }} />
-      <Typography variant="h6" sx={{ mt: 2, fontWeight: 500, color: '#1976d2' }}>
+      <CircularProgress size={60} sx={{ color: '#1976d2' }} />      <Typography variant="h6" sx={{ mt: 2, fontWeight: 500, color: '#1976d2', fontFamily: 'var(--font-gilroy)' }}>
         {message}
       </Typography>
     </Box>

@@ -9,6 +9,14 @@ export const autoMarkAbsents = functions.pubsub
   .onRun(async () => {
     const now = new Date();
     const todayStr = now.toISOString().slice(0, 10);
+    const daysOfWeek = [
+      "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
+      "Friday", "Saturday",
+    ];
+    const todayDay = daysOfWeek[now.getDay()];
+    console.log(
+      `[autoMarkAbsents] Running at ${now.toISOString()} (${todayDay})`,
+    );
 
     // 1. Get all non-archived classrooms
     const classroomsSnap = await db
@@ -26,17 +34,8 @@ export const autoMarkAbsents = functions.pubsub
 
       // 2. For each session, check if it ended today
       for (const session of sessions) {
-        // session.day: e.g. "Monday", "Tuesday", etc.
-        // session.endTime: e.g. "09:00"
         const sessionDay = session.day;
         const sessionEndTime = session.endTime; // "HH:mm"
-
-        // Check if today matches session day
-        const daysOfWeek = [
-          "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday",
-          "Friday", "Saturday",
-        ];
-        const todayDay = daysOfWeek[now.getDay()];
         if (todayDay !== sessionDay) continue;
 
         // Build Date object for today's session end
@@ -45,10 +44,16 @@ export const autoMarkAbsents = functions.pubsub
         sessionEnd.setHours(endHour, endMinute, 0, 0);
 
         // If session ended within the last 30 minutes
-        if (now > sessionEnd &&
-          now.getTime() - sessionEnd.getTime() < 30 * 60 * 1000) {
+        if (
+          now > sessionEnd &&
+          now.getTime() - sessionEnd.getTime() < 30 * 60 * 1000
+        ) {
+          console.log(
+            `[autoMarkAbsents] Checking class ${classCode} session ${sessionDay} ${sessionEndTime}`,
+          );
           // 3. Get all students in this class
-          const studentsSnap = await db.collection("students")
+          const studentsSnap = await db
+            .collection("students")
             .where("classCode", "==", classCode)
             .get();
 
@@ -56,21 +61,29 @@ export const autoMarkAbsents = functions.pubsub
             const student = studentDoc.data();
             const studentId = student.studentId;
 
-            // 4. Check if attendance exists for this session (today)
-            const attendanceSnap = await db.collection("attendance")
+            // 4. Check if attendance exists for this session (today, for this subject if available)
+            let attendanceQuery = db
+              .collection("attendance")
               .where("classCode", "==", classCode)
               .where("studentId", "==", studentId)
-              .where("timestamp", ">=", new Date(todayStr + "T00:00:00"))
-              .where("timestamp", "<=", new Date(todayStr + "T23:59:59"))
-              .get();
+              .where("timestamp", ">=", new Date(`${todayStr}T00:00:00`))
+              .where("timestamp", "<=", new Date(`${todayStr}T23:59:59`));
+            if (session.subject) {
+              attendanceQuery = attendanceQuery.where("subject", "==", session.subject);
+            }
+            const attendanceSnap = await attendanceQuery.get();
 
             if (attendanceSnap.empty) {
               // 5. Mark as absent
+              console.log(
+                `[autoMarkAbsents] Marking absent: studentId=${studentId}, ` +
+                `classCode=${classCode}, subject=${session.subject || null}`,
+              );
               await db.collection("attendance").add({
                 classCode,
                 studentId,
                 studentName: student.fullName || "",
-                subject: null,
+                subject: session.subject || null,
                 timestamp: admin.firestore.Timestamp.fromDate(sessionEnd),
                 status: "absent",
                 proofImage: null,

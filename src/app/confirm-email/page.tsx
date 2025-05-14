@@ -63,17 +63,12 @@ export default function ConfirmEmailPage() {
             maxWidth: 400,
             mx: "auto",
           }}
-        >
-          <Typography variant="h5" component="h1" gutterBottom>
+        >          <Typography variant="h5" component="h1" gutterBottom sx={{ fontFamily: 'var(--font-gilroy)', fontWeight: 600 }}>
             Please Check Your Email
-          </Typography>
-
-          <Typography variant="body1" paragraph>
+          </Typography>          <Typography variant="body1" paragraph sx={{ fontFamily: 'var(--font-nunito)' }}>
             We have sent a verification email to your email address. Please check
             your inbox (or spam folder) to confirm your email address.
-          </Typography>
-
-          <Typography variant="body2" color="text.secondary" paragraph>
+          </Typography>          <Typography variant="body2" color="text.secondary" paragraph sx={{ fontFamily: 'var(--font-nunito)' }}>
             If you haven't received the email yet, make sure to check your spam
             folder. You can also resend the verification email by clicking the
             button below.

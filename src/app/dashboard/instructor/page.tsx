@@ -5,7 +5,7 @@ import { Box, Paper, Typography, Button, TextField, AppBar, Toolbar, IconButton,
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../../lib/firebase";
 import { signOut, onAuthStateChanged } from "firebase/auth";
-import { collection, addDoc, query, where, getDocs, doc, updateDoc } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, doc, updateDoc, onSnapshot } from "firebase/firestore";
 import AddIcon from "@mui/icons-material/Add";
 import LogoutIcon from "@mui/icons-material/Logout";
 import Tooltip from "@mui/material/Tooltip";
@@ -25,6 +25,9 @@ import UnarchiveIcon from '@mui/icons-material/Unarchive';
 import dynamic from 'next/dynamic';
 import LoadingOverlay from '../../../components/LoadingOverlay';
 import EditIcon from '@mui/icons-material/Edit';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import Snackbar from '@mui/material/Snackbar';
+import Alert from '@mui/material/Alert';
 
 // Create a wrapper component for client-side only rendering
 const ClientSideWrapper = dynamic(() => Promise.resolve(({ children }: { children: React.ReactNode }) => <>{children}</>), {
@@ -61,6 +64,10 @@ export default function InstructorDashboard() {
     { day: '', startTime: '', endTime: '' }
   ]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState("");
+  const [snackbarSeverity, setSnackbarSeverity] = useState<"success" | "error" | "info" | "warning">("success");
+  const [copiedClassId, setCopiedClassId] = useState<string | null>(null);
 
   // Add this useEffect to handle client-side initialization
   useEffect(() => {
@@ -274,6 +281,54 @@ export default function InstructorDashboard() {
     }
   }, [userId, showArchived]); // Re-fetch when archive filter changes
 
+  // Real-time pending excuse requests badge
+  useEffect(() => {
+    if (!userId) return;
+    let unsubscribeClassrooms: (() => void) | null = null;
+    let attendanceUnsubscribes: (() => void)[] = [];
+
+    unsubscribeClassrooms = onSnapshot(
+      query(collection(db, "classrooms"), where("createdBy", "==", userId)),
+      (classSnapshot) => {
+        // Clean up previous attendance listeners
+        attendanceUnsubscribes.forEach(unsub => unsub());
+        attendanceUnsubscribes = [];
+        const classroomIds = classSnapshot.docs.map(doc => doc.id);
+        if (classroomIds.length === 0) {
+          setPendingRequests(0);
+          return;
+        }
+        // Firestore 'in' queries support up to 10 items
+        const chunks: string[][] = [];
+        for (let i = 0; i < classroomIds.length; i += 10) {
+          chunks.push(classroomIds.slice(i, i + 10));
+        }
+        let chunkCounts = new Array(chunks.length).fill(0);
+        chunks.forEach((chunk, idx) => {
+          const q = query(
+            collection(db, "attendance"),
+            where("status", "==", "excused"),
+            where("classCode", "in", chunk)
+          );
+          const unsub = onSnapshot(q, (snap) => {
+            chunkCounts[idx] = snap.docs.filter(doc => !doc.data().excuseStatus).length;
+            setPendingRequests(chunkCounts.reduce((a, b) => a + b, 0));
+          });
+          attendanceUnsubscribes.push(unsub);
+        });
+      }
+    );
+    return () => {
+      if (unsubscribeClassrooms) unsubscribeClassrooms();
+      attendanceUnsubscribes.forEach(unsub => unsub());
+    };
+  }, [userId]);
+
+  // Debug: log pendingRequests to see if it updates
+  useEffect(() => {
+    console.log('Pending Requests:', pendingRequests);
+  }, [pendingRequests]);
+
   // Handle Logout
   const handleLogout = async () => {
     try {
@@ -434,6 +489,33 @@ export default function InstructorDashboard() {
     setOpenForm(false);
   };
 
+  const showSnackbar = (message: string, severity: "success" | "error" | "info" | "warning" = "success") => {
+    setSnackbarMessage(message);
+    setSnackbarSeverity(severity);
+    setSnackbarOpen(true);
+  };
+
+  const handleCloseSnackbar = () => {
+    setSnackbarOpen(false);
+  };
+
+  const copyClassCode = async (classroomId: string, event: React.MouseEvent) => {
+    event.stopPropagation(); // Prevent opening classroom when clicking copy button
+    try {
+      await navigator.clipboard.writeText(classroomId);
+      setCopiedClassId(classroomId);
+      showSnackbar("Class code copied to clipboard!");
+      
+      // Reset the copied state after 2 seconds
+      setTimeout(() => {
+        setCopiedClassId(null);
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy class code:", err);
+      showSnackbar("Failed to copy class code", "error");
+    }
+  };
+
   return (
     <ClientSideWrapper>
       {isLoading && <LoadingOverlay isLoading={isLoading} message="Loading dashboard..." />}
@@ -447,65 +529,68 @@ export default function InstructorDashboard() {
         {/* Sidebar */}
         <Box
           sx={{
-            width: { xs: '70px', md: '240px' },
-            borderRight: '1px solid #e3e8f7', // blue-tinted border
-            bgcolor: '#fff',
+            width: { xs: '70px', md: '220px' },
+            bgcolor: '#f9fafb',
+            borderRight: '1px solid #e5e7eb',
             position: 'fixed',
             height: '100vh',
             display: 'flex',
             flexDirection: 'column',
-            py: 2
+            py: 2,
+            boxShadow: '0 2px 8px 0 rgba(51,78,172,0.04)',
           }}
         >
           {/* Logo */}
-          <Box sx={{ px: 3, py: 2, mb: 4 }}>
-            <Typography
+          <Box sx={{ px: 2, py: 2, mb: 3, display: 'flex', justifyContent: 'center' }}>
+            <Box 
+              component="img"
+              src="/attendify.svg"
+              alt="Attendify Logo"
               sx={{
-                fontSize: '1.5rem',
-                fontWeight: 600,
-                color: '#334eac', // theme primary
+                height: 40,
+                width: 'auto',
                 display: { xs: 'none', md: 'block' }
               }}
-            >
-              Attendify
-            </Typography>
-            <Typography
+            />
+            <Box 
+              component="img"
+              src="/favicon_io/android-chrome-192x192.png"
+              alt="Attendify Logo"
               sx={{
-                fontSize: '1.5rem',
-                fontWeight: 600,
-                color: '#334eac',
+                height: 32,
+                width: 'auto',
                 display: { xs: 'block', md: 'none' }
               }}
-            >
-              E
-            </Typography>
+            />
           </Box>
-
           {/* Navigation Items */}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 2 }}>
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1 }}>
             <Button
               startIcon={<HomeIcon />}
               sx={{
                 justifyContent: 'flex-start',
                 color: '#334eac',
-                bgcolor: 'rgba(51, 78, 172, 0.08)',
-                borderRadius: '10px',
-                py: { xs: 1, md: 1.5 },
-                px: { xs: 1.5, md: 2 },
+                bgcolor: 'rgba(51, 78, 172, 0.07)',
+                borderRadius: '8px',
+                py: { xs: 1, md: 1.2 },
+                px: { xs: 1.2, md: 1.7 },
                 minWidth: 0,
                 width: '100%',
-                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.12)' },
-                '& .MuiButton-startIcon': { 
+                fontWeight: 500,
+                fontSize: { xs: '1rem', md: '1.05rem' },
+                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.13)' },
+                '& .MuiButton-startIcon': {
                   margin: 0,
-                  mr: { xs: 0, md: 2 },
-                  minWidth: { xs: 24, md: 'auto' }
+                  mr: { xs: 0, md: 1.5 },
+                  minWidth: { xs: 22, md: 'auto' }
                 }
               }}
             >
               <Typography
                 sx={{
                   display: { xs: 'none', md: 'block' },
-                  fontWeight: 500
+                  fontWeight: 500,
+                  fontFamily: 'var(--font-gilroy)'
                 }}
               >
                 Classrooms
@@ -513,28 +598,35 @@ export default function InstructorDashboard() {
             </Button>
 
             <Button
-              startIcon={<PeopleIcon />}
+              startIcon={
+                <Badge color="error" badgeContent={pendingRequests} invisible={false} sx={{ '& .MuiBadge-badge': { fontWeight: 600, fontSize: 13, minWidth: 20, height: 20 } }}>
+                  <PeopleIcon />
+                </Badge>
+              }
               onClick={() => router.push('/student-requests')}
               sx={{
                 justifyContent: 'flex-start',
                 color: '#64748b',
-                borderRadius: '10px',
-                py: { xs: 1, md: 1.5 },
-                px: { xs: 1.5, md: 2 },
+                borderRadius: '8px',
+                py: { xs: 1, md: 1.2 },
+                px: { xs: 1.2, md: 1.7 },
                 minWidth: 0,
                 width: '100%',
-                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
-                '& .MuiButton-startIcon': { 
+                fontWeight: 500,
+                fontSize: { xs: '1rem', md: '1.05rem' },
+                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+                '& .MuiButton-startIcon': {
                   margin: 0,
-                  mr: { xs: 0, md: 2 },
-                  minWidth: { xs: 24, md: 'auto' }
+                  mr: { xs: 0, md: 1.5 },
+                  minWidth: { xs: 22, md: 'auto' }
                 }
               }}
             >
               <Typography
                 sx={{
                   display: { xs: 'none', md: 'block' },
-                  fontWeight: 500
+                  fontWeight: 500,
+                  fontFamily: 'var(--font-gilroy)'
                 }}
               >
                 Student Requests
@@ -547,23 +639,26 @@ export default function InstructorDashboard() {
               sx={{
                 justifyContent: 'flex-start',
                 color: '#64748b',
-                borderRadius: '10px',
-                py: { xs: 1, md: 1.5 },
-                px: { xs: 1.5, md: 2 },
+                borderRadius: '8px',
+                py: { xs: 1, md: 1.2 },
+                px: { xs: 1.2, md: 1.7 },
                 minWidth: 0,
                 width: '100%',
-                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
-                '& .MuiButton-startIcon': { 
+                fontWeight: 500,
+                fontSize: { xs: '1rem', md: '1.05rem' },
+                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+                '& .MuiButton-startIcon': {
                   margin: 0,
-                  mr: { xs: 0, md: 2 },
-                  minWidth: { xs: 24, md: 'auto' }
+                  mr: { xs: 0, md: 1.5 },
+                  minWidth: { xs: 22, md: 'auto' }
                 }
               }}
             >
               <Typography
                 sx={{
                   display: { xs: 'none', md: 'block' },
-                  fontWeight: 500
+                  fontWeight: 500,
+                  fontFamily: 'var(--font-gilroy)'
                 }}
               >
                 Reports
@@ -577,23 +672,26 @@ export default function InstructorDashboard() {
                 sx={{
                   justifyContent: 'flex-start',
                   color: '#64748b',
-                  borderRadius: '10px',
-                  py: { xs: 1, md: 1.5 },
-                  px: { xs: 1.5, md: 2 },
+                  borderRadius: '8px',
+                  py: { xs: 1, md: 1.2 },
+                  px: { xs: 1.2, md: 1.7 },
                   minWidth: 0,
                   width: '100%',
-                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
-                  '& .MuiButton-startIcon': { 
+                  fontWeight: 500,
+                  fontSize: { xs: '1rem', md: '1.05rem' },
+                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+                  '& .MuiButton-startIcon': {
                     margin: 0,
-                    mr: { xs: 0, md: 2 },
-                    minWidth: { xs: 24, md: 'auto' }
+                    mr: { xs: 0, md: 1.5 },
+                    minWidth: { xs: 22, md: 'auto' }
                   }
                 }}
               >
                 <Typography
                   sx={{
                     display: { xs: 'none', md: 'block' },
-                    fontWeight: 500
+                    fontWeight: 500,
+                    fontFamily: 'var(--font-gilroy)'
                   }}
                 >
                   Settings
@@ -606,23 +704,26 @@ export default function InstructorDashboard() {
                 sx={{
                   justifyContent: 'flex-start',
                   color: '#64748b',
-                  borderRadius: '10px',
-                  py: { xs: 1, md: 1.5 },
-                  px: { xs: 1.5, md: 2 },
+                  borderRadius: '8px',
+                  py: { xs: 1, md: 1.2 },
+                  px: { xs: 1.2, md: 1.7 },
                   minWidth: 0,
                   width: '100%',
-                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
-                  '& .MuiButton-startIcon': { 
+                  fontWeight: 500,
+                  fontSize: { xs: '1rem', md: '1.05rem' },
+                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+                  '& .MuiButton-startIcon': {
                     margin: 0,
-                    mr: { xs: 0, md: 2 },
-                    minWidth: { xs: 24, md: 'auto' }
+                    mr: { xs: 0, md: 1.5 },
+                    minWidth: { xs: 22, md: 'auto' }
                   }
                 }}
               >
                 <Typography
                   sx={{
                     display: { xs: 'none', md: 'block' },
-                    fontWeight: 500
+                    fontWeight: 500,
+                    fontFamily: 'var(--font-gilroy)'
                   }}
                 >
                   Sign Out
@@ -637,8 +738,11 @@ export default function InstructorDashboard() {
         <Box
           sx={{
             flexGrow: 1,
-            ml: { xs: '70px', md: '240px' },
-            p: { xs: 2, sm: 3, md: 4 }
+            ml: { xs: '70px', md: '220px' },
+            p: { xs: 2, sm: 3, md: 4 },
+            width: '100%',
+            minHeight: '100vh',
+            bgcolor: '#f7fafd',
           }}
         >
           {/* Stats Section */}
@@ -660,10 +764,10 @@ export default function InstructorDashboard() {
                   bgcolor: 'white'
                 }}
               >
-                <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.875rem' }}>
+                <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.875rem', fontFamily: 'var(--font-nunito)' }}>
                   Total Classrooms
                 </Typography>
-                <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#1e293b' }}>
+                <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
                   {classrooms.length}
                 </Typography>
               </Paper>
@@ -677,10 +781,10 @@ export default function InstructorDashboard() {
                   bgcolor: 'white'
                 }}
               >
-                <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.875rem' }}>
+                <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.875rem', fontFamily: 'var(--font-nunito)' }}>
                   Active Students
                 </Typography>
-                <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#1e293b' }}>
+                <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
                   {activeStudents}
                 </Typography>
               </Paper>
@@ -694,39 +798,39 @@ export default function InstructorDashboard() {
                   bgcolor: 'white'
                 }}
               >
-                <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.875rem' }}>
+                <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.875rem', fontFamily: 'var(--font-nunito)' }}>
                   Today's Attendance
                 </Typography>
                 <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                   <Box>
-                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#22c55e' }}>
+                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#22c55e', fontFamily: 'var(--font-gilroy)' }}>
                       {attendanceStats.present}
                     </Typography>
-                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b' }}>
+                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b', fontFamily: 'var(--font-nunito)' }}>
                       Present
                     </Typography>
                   </Box>
                   <Box>
-                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#eab308' }}>
+                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#eab308', fontFamily: 'var(--font-gilroy)' }}>
                       {attendanceStats.late}
                     </Typography>
-                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b' }}>
+                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b', fontFamily: 'var(--font-nunito)' }}>
                       Late
                     </Typography>
                   </Box>
                   <Box>
-                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#eab308' }}>
+                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#eab308', fontFamily: 'var(--font-gilroy)' }}>
                       {attendanceStats.excused}
                     </Typography>
-                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b' }}>
+                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b', fontFamily: 'var(--font-nunito)' }}>
                       Excused
                     </Typography>
                   </Box>
                   <Box>
-                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#ef4444' }}>
+                    <Typography sx={{ fontSize: '1.5rem', fontWeight: 600, color: '#ef4444', fontFamily: 'var(--font-gilroy)' }}>
                       {attendanceStats.absent}
                     </Typography>
-                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b' }}>
+                    <Typography sx={{ fontSize: '0.875rem', color: '#64748b', fontFamily: 'var(--font-nunito)' }}>
                       Absent
                     </Typography>
                   </Box>
@@ -747,6 +851,7 @@ export default function InstructorDashboard() {
                   sx={{ 
                     fontWeight: 600, 
                     color: '#1e293b',
+                    fontFamily: 'var(--font-gilroy)'
                   }}
                 >
                   {showArchived ? 'Archived Classrooms' : 'Your Classrooms'}
@@ -776,7 +881,8 @@ export default function InstructorDashboard() {
                     variant="h6" 
                     sx={{ 
                       mb: 2,
-                      fontSize: { xs: '1rem', sm: '1.25rem' }
+                      fontSize: { xs: '1rem', sm: '1.25rem' },
+                      fontFamily: 'var(--font-gilroy)'
                     }}
                   >
                     No classrooms yet
@@ -784,7 +890,8 @@ export default function InstructorDashboard() {
                   <Typography 
                     variant="body1"
                     sx={{
-                      fontSize: { xs: '0.875rem', sm: '1rem' }
+                      fontSize: { xs: '0.875rem', sm: '1rem' },
+                      fontFamily: 'var(--font-nunito)'
                     }}
                   >
                     Create your first classroom to get started
@@ -812,22 +919,23 @@ export default function InstructorDashboard() {
                         minHeight: { xs: "180px", sm: "200px" },
                         display: "flex",
                         flexDirection: "column",
-                        borderRadius: { xs: '12px', sm: '16px' },
-                        transition: "all 0.3s ease",
+                        borderRadius: '10px',
+                        transition: "all 0.3s cubic-bezier(.4,0,.2,1)",
                         cursor: "pointer",
-                        bgcolor: 'rgba(255, 255, 255, 0.8)',
+                        bgcolor: 'rgba(255,255,255,0.96)',
                         backdropFilter: 'blur(10px)',
-                        border: '1px solid rgba(0, 0, 0, 0.1)',
+                        border: '1px solid #e5e7eb',
+                        boxShadow: '0 2px 8px 0 rgba(51,78,172,0.06)',
                         '&:hover': {
                           transform: { xs: 'scale(1.02)', sm: 'translateY(-4px)' },
                           boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-                          bgcolor: 'rgba(255, 255, 255, 0.9)',
+                          bgcolor: 'rgba(255,255,255,0.99)',
                         }
                       }}
                       onClick={() => router.push(`/classroom/${classroom.id}`)}
                     >
                       <Box sx={{ mb: 'auto', position: 'relative' }}>
-                        <Box sx={{ position: 'absolute', right: -8, top: -8, display: 'flex' }}>
+                        <Box sx={{ position: 'absolute', right: -8, top: -8, display: 'flex', zIndex: 2 }}>
                           <IconButton
                             onClick={(e) => {
                               e.stopPropagation(); // Prevent opening classroom
@@ -841,7 +949,11 @@ export default function InstructorDashboard() {
                             }}
                             sx={{
                               color: '#64748b',
-                              mr: 1
+                              mr: 1,
+                              bgcolor: 'rgba(255,255,255,0.8)',
+                              '&:hover': {
+                                bgcolor: 'rgba(255,255,255,0.95)'
+                              }
                             }}
                           >
                             <EditIcon />
@@ -852,6 +964,10 @@ export default function InstructorDashboard() {
                               : handleArchiveClassroom(classroom.id, e)}
                             sx={{
                               color: '#64748b',
+                              bgcolor: 'rgba(255,255,255,0.8)',
+                              '&:hover': {
+                                bgcolor: 'rgba(255,255,255,0.95)'
+                              }
                             }}
                           >
                             {showArchived ? <UnarchiveIcon /> : <ArchiveIcon />}
@@ -864,7 +980,13 @@ export default function InstructorDashboard() {
                             fontSize: { xs: '1.1rem', sm: '1.2rem' },
                             color: '#1d1d1f',
                             mb: 1.5,
-                            lineHeight: 1.2
+                            lineHeight: 1.2,
+                            fontFamily: 'var(--font-gilroy)',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                            maxWidth: 'calc(100% - 70px)',
+                            pr: 1
                           }}
                         >
                           {classroom.name}
@@ -873,19 +995,51 @@ export default function InstructorDashboard() {
                           variant="body2"
                           sx={{
                             color: '#86868b',
-                            mb: 2,
+                            mb: 1,
                             lineHeight: 1.4,
                             fontSize: { xs: '0.875rem', sm: '0.875rem' },
                             display: '-webkit-box',
                             WebkitLineClamp: 2,
                             WebkitBoxOrient: 'vertical',
-                            overflow: 'hidden'
+                            overflow: 'hidden',
+                            fontFamily: 'var(--font-nunito)'
                           }}
                         >
                           {classroom.description || "No description provided"}
                         </Typography>
                       </Box>
-                      <Box sx={{ mt: 2 }}>
+                      <Box sx={{ mt: 0.5 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                          <Typography
+                            variant="body2"
+                            sx={{
+                              color: '#1e293b',
+                              fontSize: { xs: '0.875rem', sm: '0.875rem' },
+                              fontWeight: 500,
+                              fontFamily: 'var(--font-nunito)',
+                              mr: 1
+                            }}
+                          >
+                            Class Code: 
+                          </Typography>
+                          <Tooltip 
+                            title={copiedClassId === classroom.id ? "Copied!" : "Copy class code"}
+                            placement="top"
+                            arrow
+                          >
+                            <IconButton
+                              size="small"
+                              onClick={(e) => copyClassCode(classroom.id, e)}
+                              sx={{
+                                p: 0.5,
+                                color: copiedClassId === classroom.id ? '#22c55e' : '#64748b',
+                                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.08)' }
+                              }}
+                            >
+                              <ContentCopyIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </Box>
                         <Typography
                           variant="body2"
                           sx={{
@@ -893,10 +1047,20 @@ export default function InstructorDashboard() {
                             mb: 2,
                             lineHeight: 1.4,
                             fontSize: { xs: '0.875rem', sm: '0.875rem' },
-                            fontWeight: 500
+                            fontWeight: 500,
+                            fontFamily: 'var(--font-nunito)'
                           }}
                         >
-                          {classroom.sessions ? classroom.sessions.map((session: any) => `${session.day}: ${session.startTime} - ${session.endTime}`).join(', ') : 'No schedule set'}
+                          {classroom.sessions ? (
+                            <>
+                              Schedule:
+                              {classroom.sessions.map((session: any, idx: number) => (
+                                <span key={idx} style={{ display: 'block' }}>
+                                  {session.day}: {session.startTime} - {session.endTime}
+                                </span>
+                              ))}
+                            </>
+                          ) : 'No schedule set'}
                         </Typography>
                         <Box 
                           sx={{ 
@@ -914,7 +1078,8 @@ export default function InstructorDashboard() {
                               sx={{
                                 color: '#64748b',
                                 fontSize: { xs: '0.875rem', sm: '0.875rem' },
-                                fontWeight: 500
+                                fontWeight: 500,
+                                fontFamily: 'var(--font-nunito)'
                               }}
                             >
                               {studentCounts[classroom.id] || 0} student{studentCounts[classroom.id] !== 1 ? 's' : ''}
@@ -927,6 +1092,8 @@ export default function InstructorDashboard() {
                               color: '#334eac',
                               minWidth: 'auto',
                               p: 1,
+                              fontFamily: 'var(--font-gilroy)',
+                              fontWeight: 600,
                               '&:hover': {
                                 bgcolor: 'rgba(51, 78, 172, 0.08)'
                               }
@@ -982,7 +1149,7 @@ export default function InstructorDashboard() {
                 sx: {
                   backgroundColor: 'rgba(0, 0, 0, 0.5)',
                   backdropFilter: 'blur(4px)',
-                  overflow: 'hidden'
+                  overflow: 'auto'
                 }
               }
             }}
@@ -990,26 +1157,27 @@ export default function InstructorDashboard() {
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              overflow: 'hidden',
+              overflow: 'auto',
+              padding: { xs: '16px 0', sm: 0 },
               '& .MuiBackdrop-root': {
-                overflow: 'hidden'
+                overflow: 'auto'
               }
             }}
           >
             <Paper
               elevation={0}
               sx={{
-                width: { xs: '90%', sm: '480px' },
-                p: { xs: 3, sm: 4 },
-                borderRadius: { xs: '16px', sm: '20px' },
-                bgcolor: 'rgba(255, 255, 255, 0.98)',
-                border: '1px solid rgba(0, 0, 0, 0.1)',
+                width: { xs: '95%', sm: '480px' },
+                p: { xs: 2.5, sm: 4 },
+                borderRadius: { xs: '12px', sm: '16px' },
+                bgcolor: 'rgba(255,255,255,0.98)',
+                border: '1px solid #e5e7eb',
                 boxShadow: '0 8px 32px rgba(0,0,0,0.12)',
-                maxHeight: '90vh',
+                maxHeight: { xs: '85vh', sm: '90vh' },
                 overflowY: 'auto',
                 position: 'relative',
                 outline: 'none',
-                mx: 2,
+                mx: { xs: 1, sm: 2 },
                 '&::-webkit-scrollbar': {
                   width: '8px'
                 },
@@ -1024,15 +1192,26 @@ export default function InstructorDashboard() {
                 sx={{ 
                   fontWeight: 600, 
                   color: '#1d1d1f',
-                  mb: 3,
-                  fontSize: { xs: '1.25rem', sm: '1.5rem' }
+                  mb: { xs: 2.5, sm: 3 },
+                  fontSize: { xs: '1.25rem', sm: '1.5rem' },
+                  fontFamily: 'var(--font-gilroy)'
                 }}
               >
                 {editMode ? 'Edit Classroom' : 'Create a Classroom'}
               </Typography>
     
               {error && (
-                <Typography color="error" sx={{ mb: 2 }}>
+                <Typography 
+                  color="error" 
+                  sx={{ 
+                    mb: 2.5, 
+                    fontFamily: 'var(--font-nunito)',
+                    fontSize: { xs: '0.875rem', sm: '1rem' },
+                    padding: { xs: '8px 12px', sm: 0 },
+                    backgroundColor: 'rgba(239, 68, 68, 0.08)',
+                    borderRadius: '8px',
+                  }}
+                >
                   {error}
                 </Typography>
               )}
@@ -1044,9 +1223,15 @@ export default function InstructorDashboard() {
                 value={classroomName}
                 onChange={(e) => setClassroomName(e.target.value)}
                 sx={{
-                  mb: 3,
+                  mb: { xs: 2.5, sm: 3 },
                   '& .MuiOutlinedInput-root': {
-                    borderRadius: { xs: '10px', sm: '12px' },
+                    borderRadius: { xs: '8px', sm: '12px' },
+                  },
+                  '& .MuiInputLabel-root': {
+                    fontSize: { xs: '0.9rem', sm: '1rem' },
+                  },
+                  '& .MuiOutlinedInput-input': {
+                    padding: { xs: '12px 14px', sm: '16.5px 14px' },
                   }
                 }}
               />
@@ -1060,58 +1245,147 @@ export default function InstructorDashboard() {
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 sx={{
-                  mb: 3,
+                  mb: { xs: 2.5, sm: 3 },
                   '& .MuiOutlinedInput-root': {
-                    borderRadius: { xs: '10px', sm: '12px' },
+                    borderRadius: { xs: '8px', sm: '12px' },
+                  },
+                  '& .MuiInputLabel-root': {
+                    fontSize: { xs: '0.9rem', sm: '1rem' },
                   }
                 }}
               />
 
-              <Box sx={{ mb: 3 }}>
-                <Typography sx={{ mb: 1, fontWeight: 500 }}>Sessions</Typography>
+              <Box sx={{ mb: { xs: 2.5, sm: 3 } }}>
+                <Typography sx={{ 
+                    mb: { xs: 1.5, sm: 1 }, 
+                    fontWeight: 500, 
+                    fontFamily: 'var(--font-gilroy)',
+                    fontSize: { xs: '0.95rem', sm: '1rem' }
+                  }}
+                >
+                  Sessions
+                </Typography>
                 {sessions.map((session, idx) => (
-                  <Box key={idx} sx={{ display: 'flex', gap: 1, mb: 1, alignItems: 'center' }}>
-                    <FormControl sx={{ minWidth: 110 }}>
+                  <Box 
+                    key={idx} 
+                    sx={{ 
+                      display: 'flex', 
+                      flexDirection: { xs: 'column', sm: 'row' },
+                      gap: { xs: 1.5, sm: 1 }, 
+                      mb: 2.5,
+                      pb: { xs: 2, sm: 0 },
+                      borderBottom: { xs: idx < sessions.length - 1 ? '1px solid #f0f0f0' : 'none', sm: 'none' },
+                      position: 'relative'
+                    }}
+                  >
+                    <FormControl sx={{ width: { xs: '100%', sm: 'auto' }, minWidth: { sm: 110 } }}>
                       <InputLabel></InputLabel>
                       <TextField
                         select
-                        //label="Day"
+                        label="Day"
                         value={session.day}
                         onChange={e => handleSessionChange(idx, 'day', e.target.value)}
                         SelectProps={{ native: true }}
+                        variant="outlined"
+                        sx={{ 
+                          '& .MuiOutlinedInput-root': {
+                            borderRadius: { xs: '8px', sm: '10px' },
+                          }
+                        }}
                       >
-                        {session.day === '' && <option value="">Select a day</option>}
                         {daysOfWeek.map(day => <option key={day} value={day}>{day}</option>)}
                       </TextField>
                     </FormControl>
-                    <TextField
-                      label="Start Time"
-                      value={session.startTime}
-                      onChange={e => handleSessionChange(idx, 'startTime', e.target.value)}
-                      placeholder="e.g., 9:00 AM"
-                      sx={{ minWidth: 110 }}
-                    />
-                    <TextField
-                      label="End Time"
-                      value={session.endTime}
-                      onChange={e => handleSessionChange(idx, 'endTime', e.target.value)}
-                      placeholder="e.g., 10:00 AM"
-                      sx={{ minWidth: 110 }}
-                    />
-                    <Button onClick={() => handleRemoveSession(idx)} disabled={sessions.length === 1} color="error">Remove</Button>
+                    
+                    <Box sx={{ 
+                      display: 'flex', 
+                      width: '100%',
+                      flexDirection: { xs: 'row', sm: 'row' }, 
+                      gap: 1,
+                      alignItems: 'center'
+                    }}>
+                      <TextField
+                        label="Start Time"
+                        value={session.startTime}
+                        onChange={e => handleSessionChange(idx, 'startTime', e.target.value)}
+                        placeholder="e.g., 9:00 AM"
+                        sx={{ 
+                          flexGrow: 1,
+                          '& .MuiOutlinedInput-root': {
+                            borderRadius: { xs: '8px', sm: '10px' },
+                          }
+                        }}
+                        variant="outlined"
+                      />
+                      <TextField
+                        label="End Time"
+                        value={session.endTime}
+                        onChange={e => handleSessionChange(idx, 'endTime', e.target.value)}
+                        placeholder="e.g., 10:00 AM"
+                        sx={{ 
+                          flexGrow: 1,
+                          '& .MuiOutlinedInput-root': {
+                            borderRadius: { xs: '8px', sm: '10px' },
+                          }
+                        }}
+                        variant="outlined"
+                      />
+                    </Box>
+                    
+                    <Button 
+                      onClick={() => handleRemoveSession(idx)} 
+                      disabled={sessions.length === 1} 
+                      color="error"
+                      sx={{
+                        alignSelf: { xs: 'flex-end', sm: 'center' },
+                        minWidth: { xs: '80px', sm: 'auto' }
+                      }}
+                    >
+                      Remove
+                    </Button>
                   </Box>
                 ))}
-                <Button onClick={handleAddSession} sx={{ mt: 1 }}>Add Session</Button>
+                <Button 
+                  onClick={handleAddSession} 
+                  sx={{ 
+                    mt: 1,
+                    fontFamily: 'var(--font-gilroy)', 
+                    fontWeight: 600,
+                    borderRadius: '8px',
+                    '&:hover': {
+                      bgcolor: 'rgba(51, 78, 172, 0.04)'
+                    }
+                  }}
+                  startIcon={<AddIcon />}
+                >
+                  Add Session
+                </Button>
               </Box>
     
               <Box 
                 sx={{ 
                   display: "flex", 
-                  flexDirection: { xs: 'column', sm: 'row' },
-                  gap: 2,
-                  justifyContent: { xs: 'stretch', sm: 'flex-end' }
+                  flexDirection: { xs: 'column-reverse', sm: 'row' },
+                  gap: { xs: 1.5, sm: 2 },
+                  justifyContent: { xs: 'stretch', sm: 'flex-end' },
+                  mt: { xs: 2, sm: 2 }
                 }}
               >
+                <Button
+                  fullWidth={true}
+                  onClick={handleCloseModal}
+                  sx={{
+                    textTransform: "none",
+                    color: '#86868b',
+                    borderRadius: { xs: '10px', sm: '12px' },
+                    py: { xs: 1.2, sm: 1 },
+                    '&:hover': {
+                      bgcolor: 'rgba(0,0,0,0.05)'
+                    }
+                  }}
+                >
+                  Cancel
+                </Button>
                 <Button
                   variant="contained"
                   fullWidth={true}
@@ -1121,8 +1395,7 @@ export default function InstructorDashboard() {
                     textTransform: "none",
                     bgcolor: '#334eac',
                     borderRadius: { xs: '10px', sm: '12px' },
-                    py: { xs: 1.5, sm: 1 },
-                    order: { xs: 1, sm: 0 },
+                    py: { xs: 1.2, sm: 1 },
                     '&:hover': {
                       bgcolor: '#22357a'
                     }
@@ -1131,26 +1404,29 @@ export default function InstructorDashboard() {
                   {isSubmitting ? <CircularProgress size={24} color="inherit" sx={{ mr: 1 }} /> : null}
                   {editMode ? 'Update' : 'Create'}
                 </Button>
-                <Button
-                  fullWidth={true}
-                  onClick={handleCloseModal}
-                  sx={{
-                    textTransform: "none",
-                    color: '#86868b',
-                    order: { xs: 2, sm: 0 },
-                    '&:hover': {
-                      bgcolor: 'rgba(0,0,0,0.05)'
-                    }
-                  }}
-                >
-                  Cancel
-                </Button>
               </Box>
             </Paper>
           </Modal>
         </Box>
       </Box>
       {isLoading && <LoadingOverlay isLoading={isLoading} message="Loading dashboard..." />}
+      
+      {/* Snackbar for notifications */}
+      <Snackbar
+        open={snackbarOpen}
+        autoHideDuration={4000}
+        onClose={handleCloseSnackbar}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+      >
+        <Alert 
+          onClose={handleCloseSnackbar} 
+          severity={snackbarSeverity}
+          variant="filled"
+          sx={{ width: '100%' }}
+        >
+          {snackbarMessage}
+        </Alert>
+      </Snackbar>
     </ClientSideWrapper>
   );  
 }

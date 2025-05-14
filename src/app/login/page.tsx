@@ -130,12 +130,11 @@ export default function LoginPage() {
               marginBottom: "24px",
               animation: "fadeIn 0.6s ease-out",
             }}
-          />
-
-          <Typography 
+          />          <Typography 
             variant="h4" 
             component="h1" 
             sx={{
+              fontFamily: 'var(--font-gilroy)',
               fontWeight: 700,
               fontSize: { xs: "24px", sm: "28px" },
               mb: 1,
@@ -145,11 +144,10 @@ export default function LoginPage() {
             }}
           >
             Welcome Back
-          </Typography>
-
-          <Typography 
+          </Typography>          <Typography 
             variant="body1" 
             sx={{ 
+              fontFamily: 'var(--font-nunito)',
               mb: 4, 
               color: "text.secondary",
               fontSize: "15px" 
@@ -158,10 +156,10 @@ export default function LoginPage() {
             Sign in to continue to your account
           </Typography>
 
-          {error && (
-            <Typography 
+          {error && (            <Typography 
               color="error" 
               sx={{ 
+                fontFamily: 'var(--font-nunito)',
                 mb: 2,
                 p: 1.5,
                 bgcolor: "rgba(211, 47, 47, 0.05)",
@@ -173,10 +171,10 @@ export default function LoginPage() {
             </Typography>
           )}
 
-          {emailVerifiedError && (
-            <Typography 
+          {emailVerifiedError && (            <Typography 
               color="error" 
               sx={{ 
+                fontFamily: 'var(--font-nunito)',
                 mb: 2,
                 p: 1.5,
                 bgcolor: "rgba(211, 47, 47, 0.05)",

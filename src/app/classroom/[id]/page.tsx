@@ -12,7 +12,7 @@ import {
   Divider, Alert, Snackbar, TextField, InputAdornment, Fade,
   FormControl, InputLabel, Menu, ListItemIcon, ListItemText,
   ToggleButtonGroup, ToggleButton, Badge, useMediaQuery, useTheme,
-  Checkbox
+  Checkbox, Modal
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import PersonIcon from "@mui/icons-material/Person";
@@ -30,10 +30,14 @@ import DownloadIcon from "@mui/icons-material/Download";
 import MoreVertIcon from "@mui/icons-material/MoreVert";
 import CheckBoxIcon from "@mui/icons-material/CheckBox";
 import CameraAltIcon from "@mui/icons-material/CameraAlt";
+import CloseIcon from "@mui/icons-material/Close";
 import LoadingOverlay from "../../../components/LoadingOverlay";
+import AttendanceCalendar from '../../../components/AttendanceCalendar';
+import dayjs from 'dayjs';
 
 interface Student {
   id: string;
+  studentId?: string; // This is the actual Firebase user ID
   fullName: string;
   statusId: string;
   email?: string;
@@ -42,6 +46,14 @@ interface Student {
   attendancePercentage?: number;
   absenceCount?: number;
   selected?: boolean;
+}
+
+interface AttendanceEntry {
+  date: string; // Format: 'YYYY-MM-DD'
+  type: 'image' | 'file';
+  url: string;
+  fileName?: string;
+  geolocation?: { latitude: number; longitude: number } | null;
 }
 
 const ClassroomPage = () => {
@@ -70,6 +82,12 @@ const ClassroomPage = () => {
   const [attendanceMode, setAttendanceMode] = useState<boolean>(false);
   const [exportAnchorEl, setExportAnchorEl] = useState<null | HTMLElement>(null);
   const [takingAttendance, setTakingAttendance] = useState<boolean>(false);
+  const [calendarModalOpen, setCalendarModalOpen] = useState(false);
+  const [calendarStudent, setCalendarStudent] = useState<Student | null>(null);
+  const [calendarEntries, setCalendarEntries] = useState<AttendanceEntry[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarYear, setCalendarYear] = useState(dayjs().year());
+  const [calendarMonth, setCalendarMonth] = useState(dayjs().month() + 1); // dayjs month is 0-based
 
   useEffect(() => {
     if (!classCode) return;
@@ -145,9 +163,9 @@ const ClassroomPage = () => {
           
           // Get user information using studentId which maps to user's id
           const userData = usersMap.get(studentData.studentId);
-          
-          return {
+            return {
             id: doc.id,
+            studentId: studentData.studentId, // Add the actual studentId from Firestore
             fullName: studentData.fullName || "Unknown",
             statusId: studentData.statusId || "1", // Default to "Enrolled"
             email: userData?.email || "No email provided",
@@ -355,6 +373,111 @@ const ClassroomPage = () => {
     // Navigate to camera attendance page with class code
     router.push(`/dashboard/student/class/${classCode}`);
   };
+  const handleOpenCalendar = async (student: Student) => {
+    console.log('Opening calendar for student:', student);
+    setCalendarStudent(student);
+    setCalendarModalOpen(true);
+    setCalendarLoading(true);
+    setCalendarYear(dayjs().year());
+    setCalendarMonth(dayjs().month() + 1);
+    try {
+      // Fetch attendance records for this student      // Use the studentId field that references the Firebase user ID, not the document ID
+      const attendanceQuery = query(
+        collection(db, 'attendance'),
+        where('classCode', '==', classCode),
+        where('studentId', '==', student.studentId || student.id) // Prefer studentId if available
+      );
+      console.log('Fetching attendance records with query:', { classCode, studentId: student.id });      const snapshot = await getDocs(attendanceQuery);
+      console.log(`Found ${snapshot.docs.length} attendance records for student:`, student.id);
+      
+      // Group by date, and allow both image and file for the same date
+      const dateMap: Record<string, AttendanceEntry> = {};
+      snapshot.docs.forEach((docSnap) => {
+        const data = docSnap.data();
+        console.log('Attendance record:', { id: docSnap.id, ...data });
+        
+        // Make sure we have a valid timestamp and format it correctly as YYYY-MM-DD
+        let date = '';
+        if (data.timestamp) {
+          if (data.timestamp.toDate) {
+            // Firebase Timestamp - convert to Date then to string
+            date = data.timestamp.toDate().toISOString().slice(0, 10);
+          } else if (data.timestamp instanceof Date) {
+            // Regular Date object
+            date = data.timestamp.toISOString().slice(0, 10);
+          } else if (typeof data.timestamp === 'string') {
+            // String timestamp - extract date portion
+            date = data.timestamp.slice(0, 10);
+          }
+        }
+        
+        console.log(`Record date: ${date}, Has proof image: ${!!data.proofImage}, Has excuse file: ${!!data.excuseFile}`);
+        if (!date) return;
+        
+        if (data.proofImage) {
+          dateMap[date] = {
+            date,
+            type: 'image',
+            url: data.proofImage,
+            geolocation: data.geolocation || null,
+          };
+        }
+          // Check if there's an excuse file
+        if (data.excuseFile) {
+          console.log('Found excuse file:', data.excuseFile, typeof data.excuseFile);
+          // If there's already an image for this date, add a file entry for the same date
+          if (dateMap[date] && dateMap[date].type === 'image') {
+            // Add a second entry for the file (calendar only shows one per day, so prefer image, but can be extended)
+            // For now, prefer image, but if we want to show both, we could extend AttendanceCalendar to support multiple entries per day
+            console.log('Already have an image for this date, preferring it over file');          } else {
+            // Format file URL consistently
+            let fileUrl = data.excuseFile;
+            console.log('Processing file URL:', fileUrl);
+            
+            // Make sure file URLs are properly formatted
+            if (typeof fileUrl === 'string') {
+              // For MongoDB URLs (they have a specific format - /api/files/...)
+              if (fileUrl.includes('/api/files/') || fileUrl.includes('/api/upload/')) {
+                // These are already correct relative paths, just ensure they start with /
+                if (!fileUrl.startsWith('/')) {
+                  fileUrl = '/' + fileUrl;
+                }
+                console.log('MongoDB file URL:', fileUrl);
+              } 
+              // For other URLs that aren't absolute
+              else if (!fileUrl.startsWith('http') && !fileUrl.startsWith('/')) {
+                fileUrl = '/' + fileUrl;
+                console.log('Fixed file path to:', fileUrl);
+              }
+            }
+              
+            dateMap[date] = {
+              date,
+              type: 'file',
+              url: fileUrl,
+              fileName: typeof data.excuseFile === 'string' ? data.excuseFile.split('/').pop() : undefined,
+              geolocation: data.geolocation || null,
+            };
+          }
+        }      });
+      const entries = Object.values(dateMap);
+      console.log('Calendar entries constructed:', entries);
+      console.log('Entries with files:', entries.filter(e => e.type === 'file'));
+      
+      setCalendarEntries(entries);
+    } catch (e) {
+      console.error('Error fetching attendance records:', e);
+      setCalendarEntries([]);
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const handleCloseCalendar = () => {
+    setCalendarModalOpen(false);
+    setCalendarStudent(null);
+    setCalendarEntries([]);
+  };
 
   // Filter and sort students for display
   const filteredStudents = students.filter(student => {
@@ -384,14 +507,12 @@ const ClassroomPage = () => {
   const enrolledCount = students.filter(s => s.statusId === "1").length;
   const droppedCount = students.filter(s => s.statusId === "2").length;
   const selectedCount = students.filter(s => s.selected).length;
-  
-  return (
-    <Box sx={{ minHeight: "100vh", bgcolor: "#F7F9FC", pb: 8 }}>
+    return (
+    <Box sx={{ minHeight: "100vh", bgcolor: "#f8faff", pb: 8 }}>
       {(loading || takingAttendance) && 
         <LoadingOverlay isLoading={true} message={takingAttendance ? "Recording attendance..." : "Loading classroom data..."} />
       }
-      
-      {/* App Bar */}
+        {/* Modern App Bar */}
       <Box 
         sx={{
           position: "fixed",
@@ -401,151 +522,331 @@ const ClassroomPage = () => {
           display: "flex", 
           justifyContent: "space-between", 
           alignItems: "center", 
-          px: 3,
+          px: { xs: 2, sm: 4 },
           py: 1.5,
-          bgcolor: "primary.main",
-          color: "#FFF",
-          boxShadow: "0 2px 10px rgba(0, 0, 0, 0.15)",
+          bgcolor: "#FFFFFF",
+          color: "#334eac",
+          boxShadow: "0 2px 20px rgba(0, 0, 0, 0.08)",
           zIndex: 1100,
+          backdropFilter: "blur(10px)",
+          borderBottom: "1px solid rgba(0, 0, 0, 0.05)",
         }}
       >
         <Box sx={{ display: "flex", alignItems: "center" }}>
-          <Tooltip title="Back to Dashboard">
-            <IconButton color="inherit" onClick={() => window.history.back()} sx={{ mr: 1 }}>
+          <Tooltip title="Back to Dashboard" arrow>
+            <IconButton 
+              onClick={() => window.history.back()} 
+              sx={{ 
+                mr: 1.5, 
+                color: "#334eac", 
+                backgroundColor: "rgba(51, 78, 172, 0.08)",
+                '&:hover': { backgroundColor: "rgba(51, 78, 172, 0.15)" }
+              }}
+            >
               <ArrowBackIcon />
             </IconButton>
           </Tooltip>
-          <SchoolIcon sx={{ mr: 1.5, fontSize: 28 }} />
-          <Typography variant="h6" fontWeight="600" noWrap>
-            {classroomName || "Classroom"}
-          </Typography>
+          <Box sx={{ display: "flex", alignItems: "center" }}>
+            <Avatar 
+              sx={{ 
+                bgcolor: "#334eac", 
+                width: 38, 
+                height: 38, 
+                mr: 1.5,
+                display: { xs: 'none', sm: 'flex' }
+              }}
+            >
+              <SchoolIcon sx={{ fontSize: 22 }} />
+            </Avatar>
+            <Typography 
+              variant="h6" 
+              fontWeight="600" 
+              noWrap
+              sx={{ 
+                fontFamily: "var(--font-gilroy)",
+                fontSize: { xs: '1.1rem', sm: '1.2rem' },
+                color: "#1e293b" 
+              }}
+            >
+              {classroomName || "Classroom"}
+            </Typography>
+          </Box>
         </Box>
 
-        <Box sx={{ display: "flex" }}>
-          <Tooltip title="Refresh Data">
-            <IconButton color="inherit" onClick={handleRefresh} sx={{ ml: 1 }}>
+        <Box sx={{ display: "flex", gap: { xs: 0.5, sm: 1 } }}>
+          <Tooltip title="Refresh Data" arrow>
+            <IconButton 
+              onClick={handleRefresh}
+              sx={{ 
+                color: "#64748b", 
+                '&:hover': { 
+                  color: "#334eac",
+                  backgroundColor: "rgba(51, 78, 172, 0.08)"
+                }
+              }}
+            >
               <RefreshIcon />
             </IconButton>
           </Tooltip>
-          <Tooltip title="Logout">
-            <IconButton color="inherit" onClick={() => alert("Logging out...")}>
+          <Tooltip title="Logout" arrow>
+            <IconButton 
+              onClick={() => alert("Logging out...")} 
+              sx={{ 
+                color: "#64748b", 
+                '&:hover': { 
+                  color: "#334eac",
+                  backgroundColor: "rgba(51, 78, 172, 0.08)"
+                }
+              }}
+            >
               <LogoutIcon />
             </IconButton>
           </Tooltip>
         </Box>
-      </Box>
-
-      {/* Main Content */}
-      <Container maxWidth="lg" sx={{ mt: 10, pt: 4 }}>
+      </Box>      {/* Main Content */}
+      <Container maxWidth="lg" sx={{ mt: 8, pt: 2 }}>
         {/* Classroom Info Card */}
         <Card 
-          elevation={2} 
+          elevation={0} 
           sx={{ 
             mb: 4, 
-            borderRadius: 2,
-            p: 3,
-            background: "linear-gradient(120deg, #3f51b5 30%, #5c6bc0 100%)",
-            color: "white"
+            borderRadius: 3,
+            p: { xs: 3, sm: 4 },
+            background: "linear-gradient(135deg, #334eac 0%, #4c63cf 100%)",
+            color: "white",
+            border: "1px solid rgba(255, 255, 255, 0.1)",
+            backdropFilter: "blur(10px)",
+            boxShadow: "0 10px 30px rgba(51, 78, 172, 0.15)"
           }}
         >
-          <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 2 }}>
+          <Box sx={{ display: "flex", flexDirection: { xs: "column", md: "row" }, gap: 3 }}>
             <Box sx={{ flex: 1 }}>
-              <Typography variant="h4" fontWeight="700" gutterBottom>
+              <Typography 
+                variant="h4" 
+                fontWeight="700" 
+                gutterBottom
+                sx={{ 
+                  fontFamily: "var(--font-gilroy)",
+                  fontSize: { xs: "1.75rem", sm: "2rem", md: "2.25rem" }
+                }}
+              >
                 {classroomName || "Unnamed Classroom"}
               </Typography>
+              
               <Box sx={{ display: "flex", alignItems: "center", mt: 1 }}>
-                <Typography variant="body1" sx={{ mr: 2 }}>
-                  Class Code: <span style={{ fontWeight: "bold" }}>{classCode}</span>
+                <Typography variant="body1" sx={{ mr: 2, fontFamily: "var(--font-nunito)" }}>
+                  Class Code: 
                 </Typography>
-                <Button 
-                  variant="contained" 
-                  size="small" 
-                  startIcon={<ContentCopyIcon />} 
-                  onClick={copyClassCode}
-                  sx={{ 
-                    bgcolor: "rgba(255,255,255,0.2)", 
-                    '&:hover': { bgcolor: "rgba(255,255,255,0.3)" } 
-                  }}
-                >
-                  Copy
-                </Button>
+                <Tooltip title="Copy class code" arrow>
+                  <Button 
+                    variant="outlined"
+                    startIcon={<ContentCopyIcon />}
+                    onClick={copyClassCode}
+                    sx={{ 
+                      color: "white",
+                      borderColor: "rgba(255,255,255,0.3)",
+                      textTransform: "none",
+                      bgcolor: "rgba(255,255,255,0.1)",
+                      fontFamily: "var(--font-nunito)",
+                      pl: 2,
+                      pr: 2.5,
+                      py: 0.75,
+                      '&:hover': { 
+                        bgcolor: "rgba(255,255,255,0.2)",
+                        borderColor: "rgba(255,255,255,0.5)"
+                      }
+                    }}
+                  >
+                    {classCode}
+                  </Button>
+                </Tooltip>
               </Box>
             </Box>
-            <Box sx={{ display: "flex", justifyContent: { xs: "flex-start", sm: "flex-end" }, mt: { xs: 2, sm: 0 } }}>
-              <Box sx={{ textAlign: "center", mr: 3 }}>
-                <GroupIcon sx={{ fontSize: 32, mb: 0.5 }} />
-                <Typography variant="h5" fontWeight="700">{students.length}</Typography>
-                <Typography variant="body2">Total Students</Typography>
+            
+            <Box sx={{ 
+              display: "flex", 
+              bgcolor: "rgba(255,255,255,0.1)",
+              borderRadius: 2,
+              p: { xs: 2, sm: 3 },
+              border: "1px solid rgba(255,255,255,0.15)",
+              justifyContent: { xs: "space-between", sm: "space-between" }, 
+              mt: { xs: 2, sm: 0 } 
+            }}>
+              <Box sx={{ textAlign: "center", px: { xs: 1, sm: 2 } }}>
+                <Avatar sx={{ 
+                  bgcolor: "rgba(255,255,255,0.2)", 
+                  color: "white",
+                  width: 48, 
+                  height: 48, 
+                  mb: 1,
+                  mx: "auto"
+                }}>
+                  <GroupIcon />
+                </Avatar>
+                <Typography variant="h5" fontWeight="700" sx={{ fontFamily: "var(--font-gilroy)" }}>
+                  {students.length}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.8, fontFamily: "var(--font-nunito)" }}>
+                  Total Students
+                </Typography>
               </Box>
-              <Box sx={{ textAlign: "center", mr: 3 }}>
-                <CheckCircleIcon sx={{ fontSize: 32, mb: 0.5, color: "#8eff8e" }} />
-                <Typography variant="h5" fontWeight="700" color="#8eff8e">{enrolledCount}</Typography>
-                <Typography variant="body2">Enrolled</Typography>
+              
+              <Box sx={{ textAlign: "center", px: { xs: 1, sm: 2 } }}>
+                <Avatar sx={{ 
+                  bgcolor: "rgba(34, 197, 94, 0.2)", 
+                  color: "#4ade80",
+                  width: 48, 
+                  height: 48, 
+                  mb: 1,
+                  mx: "auto"
+                }}>
+                  <CheckCircleIcon />
+                </Avatar>
+                <Typography variant="h5" fontWeight="700" sx={{ color: "#4ade80", fontFamily: "var(--font-gilroy)" }}>
+                  {enrolledCount}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.8, fontFamily: "var(--font-nunito)" }}>
+                  Enrolled
+                </Typography>
               </Box>
-              <Box sx={{ textAlign: "center" }}>
-                <PersonIcon sx={{ fontSize: 32, mb: 0.5, color: "#ffcccb" }} />
-                <Typography variant="h5" fontWeight="700" color="#ffcccb">{droppedCount}</Typography>
-                <Typography variant="body2">Dropped</Typography>
+              
+              <Box sx={{ textAlign: "center", px: { xs: 1, sm: 2 } }}>
+                <Avatar sx={{ 
+                  bgcolor: "rgba(239, 68, 68, 0.2)", 
+                  color: "#f87171",
+                  width: 48, 
+                  height: 48, 
+                  mb: 1,
+                  mx: "auto"
+                }}>
+                  <PersonIcon />
+                </Avatar>
+                <Typography variant="h5" fontWeight="700" sx={{ color: "#f87171", fontFamily: "var(--font-gilroy)" }}>
+                  {droppedCount}
+                </Typography>
+                <Typography variant="body2" sx={{ opacity: 0.8, fontFamily: "var(--font-nunito)" }}>
+                  Dropped
+                </Typography>
               </Box>
             </Box>
           </Box>
           
           {/* Quick Action Buttons */}
-          <Box sx={{ display: 'flex', gap: 2, mt: 3, flexWrap: 'wrap' }}>
+          <Box sx={{ display: 'flex', gap: 2, mt: 4, flexWrap: 'wrap' }}>
             <Button
-              variant="contained"
-              size="small"
-              startIcon={<CheckCircleIcon />}
+              variant={attendanceMode ? "outlined" : "contained"}
+              size="medium"
+              startIcon={attendanceMode ? <CloseIcon /> : <CheckCircleIcon />}
               onClick={handleToggleAttendanceMode}
               sx={{
-                bgcolor: attendanceMode ? "error.main" : "rgba(255,255,255,0.2)",
-                '&:hover': { bgcolor: attendanceMode ? "error.dark" : "rgba(255,255,255,0.3)" }
+                bgcolor: attendanceMode ? "transparent" : "white",
+                color: attendanceMode ? "#f87171" : "#334eac",
+                borderColor: attendanceMode ? "#f87171" : "transparent",
+                borderWidth: 2,
+                textTransform: "none",
+                fontWeight: 600,
+                px: 3,
+                py: 1,
+                fontFamily: "var(--font-nunito)",
+                borderRadius: 2,
+                '&:hover': { 
+                  bgcolor: attendanceMode ? "rgba(239, 68, 68, 0.1)" : "rgba(255,255,255,0.9)",
+                  borderColor: attendanceMode ? "#f87171" : "transparent",
+                }
               }}
             >
               {attendanceMode ? "Cancel Attendance" : "Take Attendance"}
             </Button>
           </Box>
-        </Card>
-
-        {/* Student Management Section */}
-        <Card elevation={2} sx={{ borderRadius: 2 }}>
+        </Card>        {/* Student Management Section */}
+        <Card 
+          elevation={0} 
+          sx={{ 
+            borderRadius: 3,
+            border: "1px solid rgba(0,0,0,0.08)",
+            boxShadow: "0 4px 20px rgba(0,0,0,0.03)"
+          }}
+        >
           <Box sx={{ 
-            p: 2, 
-            borderBottom: "1px solid #eaeaea", 
-            bgcolor: "#f8f9fa",
+            p: { xs: 2.5, sm: 3 }, 
+            borderBottom: "1px solid rgba(0,0,0,0.06)", 
+            bgcolor: "#ffffff",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "center",
-            flexWrap: "wrap"
+            flexWrap: "wrap",
+            borderTopLeftRadius: 12,
+            borderTopRightRadius: 12
           }}>
-            <Typography variant="h6" fontWeight="600" sx={{ my: 1 }}>
-              {attendanceMode ? 
-                `Take Attendance (${selectedCount} selected)` : 
-                "Student Management"
-              }
+            <Typography 
+              variant="h6" 
+              fontWeight="600" 
+              sx={{ 
+                my: 1, 
+                color: "#1e293b",
+                fontFamily: "var(--font-gilroy)",
+                fontSize: { xs: '1.1rem', sm: '1.2rem' }
+              }}
+            >
+              {attendanceMode ? (
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <CheckBoxIcon sx={{ mr: 1, color: "#334eac" }} />
+                  Take Attendance 
+                  <Chip 
+                    label={`${selectedCount} selected`} 
+                    size="small" 
+                    sx={{ 
+                      ml: 1.5,
+                      bgcolor: selectedCount > 0 ? 'rgba(51, 78, 172, 0.1)' : 'rgba(0,0,0,0.05)', 
+                      color: selectedCount > 0 ? '#334eac' : '#64748b',
+                      fontWeight: 600,
+                      borderRadius: '6px'
+                    }} 
+                  />
+                </Box>
+              ) : (
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <GroupIcon sx={{ mr: 1.5, color: "#334eac", fontSize: 20 }} />
+                  Student Management
+                </Box>
+              )}
             </Typography>
             
             {attendanceMode && (
               <Button
                 variant="contained"
-                color="success"
                 disabled={takingAttendance}
                 onClick={handleSubmitAttendance}
                 startIcon={<CheckBoxIcon />}
+                sx={{
+                  bgcolor: "#334eac",
+                  textTransform: "none",
+                  fontWeight: 600,
+                  borderRadius: 2,
+                  px: 2.5,
+                  fontFamily: "var(--font-nunito)",
+                  '&:hover': {
+                    bgcolor: "#22357a"
+                  },
+                  '&.Mui-disabled': {
+                    bgcolor: "rgba(51, 78, 172, 0.5)",
+                    color: "white"
+                  }
+                }}
               >
                 Submit Attendance
               </Button>
             )}
           </Box>
-          
-          {/* Search and Filter Bar */}
+            {/* Search and Filter Bar */}
           <Box sx={{ 
-            p: 2, 
+            p: { xs: 2, sm: 3 }, 
             display: "flex", 
             alignItems: "center", 
             flexWrap: "wrap", 
             gap: 2,
-            borderBottom: "1px solid #f0f0f0"
+            borderBottom: "1px solid rgba(0,0,0,0.06)",
+            bgcolor: "rgba(247, 250, 253, 0.5)"
           }}>
             <TextField
               placeholder="Search students..."
@@ -556,25 +857,68 @@ const ClassroomPage = () => {
               InputProps={{
                 startAdornment: (
                   <InputAdornment position="start">
-                    <SearchIcon sx={{ color: "text.secondary" }} />
+                    <SearchIcon sx={{ color: "#64748b" }} />
                   </InputAdornment>
                 ),
+                sx: {
+                  borderRadius: 2,
+                  backgroundColor: "#ffffff",
+                  '& .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'rgba(0,0,0,0.08)',
+                  },
+                  '&:hover .MuiOutlinedInput-notchedOutline': {
+                    borderColor: 'rgba(51, 78, 172, 0.2)',
+                  },
+                  '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                    borderColor: '#334eac',
+                  },
+                }
               }}
-              sx={{ width: { xs: "100%", sm: "auto", flexGrow: 1 } }}
+              sx={{ 
+                width: { xs: "100%", sm: "auto", flexGrow: 1 },
+                maxWidth: { sm: '350px' },
+                '& .MuiInputBase-root': {
+                  fontFamily: "var(--font-nunito)"
+                }
+              }}
             />
             
-            <Box sx={{ display: "flex", gap: 1, width: { xs: "100%", sm: "auto" } }}>
-              <FormControl size="small" sx={{ minWidth: 120 }}>
-                <InputLabel id="status-filter-label">Status</InputLabel>
+            <Box sx={{ 
+              display: "flex", 
+              gap: { xs: 1, sm: 1.5 }, 
+              width: { xs: "100%", sm: "auto" },
+              flexWrap: "wrap"
+            }}>
+              <FormControl 
+                size="small" 
+                sx={{ 
+                  minWidth: 130,
+                  '& .MuiOutlinedInput-root': {
+                    borderRadius: 2,
+                    backgroundColor: "#ffffff",
+                    fontFamily: "var(--font-nunito)",
+                    '& .MuiOutlinedInput-notchedOutline': {
+                      borderColor: 'rgba(0,0,0,0.08)',
+                    },
+                    '&:hover .MuiOutlinedInput-notchedOutline': {
+                      borderColor: 'rgba(51, 78, 172, 0.2)',
+                    },
+                    '&.Mui-focused .MuiOutlinedInput-notchedOutline': {
+                      borderColor: '#334eac',
+                    },
+                  }
+                }}
+              >
+                <InputLabel id="status-filter-label" sx={{ fontFamily: "var(--font-nunito)" }}>Status</InputLabel>
                 <Select
                   labelId="status-filter-label"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as "all" | "enrolled" | "dropped")}
                   label="Status"
                 >
-                  <MenuItem value="all">All</MenuItem>
-                  <MenuItem value="enrolled">Enrolled</MenuItem>
-                  <MenuItem value="dropped">Dropped</MenuItem>
+                  <MenuItem value="all" sx={{ fontFamily: "var(--font-nunito)" }}>All Students</MenuItem>
+                  <MenuItem value="enrolled" sx={{ fontFamily: "var(--font-nunito)" }}>Enrolled</MenuItem>
+                  <MenuItem value="dropped" sx={{ fontFamily: "var(--font-nunito)" }}>Dropped</MenuItem>
                 </Select>
               </FormControl>
               
@@ -583,6 +927,20 @@ const ClassroomPage = () => {
                 size="small" 
                 startIcon={<SortIcon />} 
                 onClick={() => setSortOrder(sortOrder === "asc" ? "desc" : "asc")}
+                sx={{
+                  borderRadius: 2,
+                  textTransform: "none",
+                  borderColor: 'rgba(0,0,0,0.08)',
+                  color: '#64748b',
+                  bgcolor: "#ffffff",
+                  fontFamily: "var(--font-nunito)",
+                  px: 2,
+                  '&:hover': {
+                    borderColor: '#334eac',
+                    bgcolor: 'rgba(51, 78, 172, 0.04)',
+                    color: '#334eac'
+                  }
+                }}
               >
                 {sortOrder === "asc" ? "A-Z" : "Z-A"}
               </Button>
@@ -592,6 +950,20 @@ const ClassroomPage = () => {
                 size="small"
                 startIcon={<DownloadIcon />}
                 onClick={openExportMenu}
+                sx={{
+                  borderRadius: 2,
+                  textTransform: "none",
+                  borderColor: 'rgba(0,0,0,0.08)',
+                  color: '#64748b',
+                  bgcolor: "#ffffff",
+                  fontFamily: "var(--font-nunito)",
+                  px: 2,
+                  '&:hover': {
+                    borderColor: '#334eac',
+                    bgcolor: 'rgba(51, 78, 172, 0.04)',
+                    color: '#334eac'
+                  }
+                }}
               >
                 Export
               </Button>
@@ -600,63 +972,168 @@ const ClassroomPage = () => {
                 anchorEl={exportAnchorEl}
                 open={Boolean(exportAnchorEl)}
                 onClose={closeExportMenu}
+                PaperProps={{
+                  elevation: 2,
+                  sx: {
+                    borderRadius: 2,
+                    mt: 1,
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.08)',
+                    border: '1px solid rgba(0,0,0,0.08)',
+                    minWidth: '180px'
+                  }
+                }}
               >
-                <MenuItem onClick={() => exportData("csv")}>
+                <MenuItem onClick={() => exportData("csv")} sx={{ fontFamily: "var(--font-nunito)", py: 1.5 }}>
                   <ListItemIcon>📄</ListItemIcon>
-                  <ListItemText>Export as CSV</ListItemText>
+                  <ListItemText primary="Export as CSV" primaryTypographyProps={{ fontFamily: "var(--font-nunito)" }} />
                 </MenuItem>
-                <MenuItem onClick={() => exportData("pdf")}>
+                <MenuItem onClick={() => exportData("pdf")} sx={{ fontFamily: "var(--font-nunito)", py: 1.5 }}>
                   <ListItemIcon>📑</ListItemIcon>
-                  <ListItemText>Export as PDF</ListItemText>
+                  <ListItemText primary="Export as PDF" primaryTypographyProps={{ fontFamily: "var(--font-nunito)" }} />
                 </MenuItem>
               </Menu>
             </Box>
           </Box>
-          
-          {/* Students Table */}
-          <TableContainer sx={{ maxHeight: "550px" }}>
+            {/* Students Table */}
+          <TableContainer 
+            sx={{ 
+              maxHeight: "550px",
+              '&::-webkit-scrollbar': {
+                width: '8px',
+                height: '8px',
+              },
+              '&::-webkit-scrollbar-track': {
+                background: '#f1f1f1',
+                borderRadius: '10px',
+              },
+              '&::-webkit-scrollbar-thumb': {
+                background: '#c1c1c1',
+                borderRadius: '10px',
+                '&:hover': {
+                  background: '#a1a1a1',
+                },
+              },
+            }}
+          >
             <Table stickyHeader size={isMobile ? "small" : "medium"}>
               <TableHead>
-                <TableRow>
+                <TableRow sx={{ 
+                  '& th': { 
+                    bgcolor: '#f9fafb',
+                    borderBottom: '2px solid rgba(0,0,0,0.05)'
+                  } 
+                }}>
                   {attendanceMode && (
-                    <TableCell padding="checkbox">
+                    <TableCell padding="checkbox" sx={{ pl: { xs: 2, sm: 3 } }}>
                       <CustomCheckbox 
                         checked={students.filter(s => s.statusId === "1").length > 0 && 
                                 students.filter(s => s.statusId === "1").every(s => s.selected)}
                         onChange={handleSelectAllStudents}
                         inputProps={{ 'aria-label': 'select all students' }}
+                        sx={{
+                          color: '#334eac',
+                          '&.Mui-checked': {
+                            color: '#334eac',
+                          },
+                        }}
                       />
                     </TableCell>
                   )}
-                  <TableCell sx={{ fontWeight: "600", fontSize: "0.95rem" }}>Student</TableCell>
+                  <TableCell 
+                    sx={{ 
+                      fontWeight: "600", 
+                      fontSize: "0.95rem", 
+                      color: "#1e293b",
+                      fontFamily: "var(--font-gilroy)",
+                      pl: attendanceMode ? { xs: 1, sm: 2 } : { xs: 2, sm: 3 }
+                    }}
+                  >
+                    Student
+                  </TableCell>
                   {!isMobile && (
-                    <TableCell sx={{ fontWeight: "600", fontSize: "0.95rem" }}>Email</TableCell>
+                    <TableCell 
+                      sx={{ 
+                        fontWeight: "600", 
+                        fontSize: "0.95rem",
+                        color: "#1e293b",
+                        fontFamily: "var(--font-gilroy)" 
+                      }}
+                    >
+                      Email
+                    </TableCell>
                   )}
-                  <TableCell sx={{ fontWeight: "600", fontSize: "0.95rem" }}>Status</TableCell>
+                  <TableCell 
+                    sx={{ 
+                      fontWeight: "600", 
+                      fontSize: "0.95rem",
+                      color: "#1e293b",
+                      fontFamily: "var(--font-gilroy)" 
+                    }}
+                  >
+                    Status
+                  </TableCell>
                   {!isMobile && (
-                    <TableCell sx={{ fontWeight: "600", fontSize: "0.95rem" }}>Last Attendance</TableCell>
+                    <TableCell 
+                      sx={{ 
+                        fontWeight: "600", 
+                        fontSize: "0.95rem",
+                        color: "#1e293b",
+                        fontFamily: "var(--font-gilroy)" 
+                      }}
+                    >
+                      Last Attendance
+                    </TableCell>
                   )}
                   {!attendanceMode && (
-                    <TableCell sx={{ fontWeight: "600", fontSize: "0.95rem" }} align="right">Actions</TableCell>
+                    <TableCell 
+                      sx={{ 
+                        fontWeight: "600", 
+                        fontSize: "0.95rem",
+                        color: "#1e293b",
+                        fontFamily: "var(--font-gilroy)" 
+                      }} 
+                      align="right"
+                    >
+                      Actions
+                    </TableCell>
                   )}
                 </TableRow>
-              </TableHead>
-              <TableBody>
+              </TableHead>              <TableBody>
                 {sortedStudents.length > 0 ? (
                   sortedStudents.map((student) => (
                     <TableRow 
                       key={student.id} 
                       hover
-                      onClick={() => handleSelectStudent(student.id)}
-                      sx={attendanceMode ? { cursor: 'pointer' } : {}}
+                      onClick={() => attendanceMode ? handleSelectStudent(student.id) : handleOpenCalendar(student)}
+                      sx={{
+                        cursor: 'pointer',
+                        '&:hover': { 
+                          bgcolor: 'rgba(51, 78, 172, 0.04)', 
+                        },
+                        '& td': { 
+                          borderColor: 'rgba(0,0,0,0.05)',
+                          py: 1.5,
+                          fontFamily: "var(--font-nunito)" 
+                        },
+                        transition: 'background-color 0.2s ease'
+                      }}
                     >
                       {attendanceMode && (
-                        <TableCell padding="checkbox">
+                        <TableCell padding="checkbox" sx={{ pl: { xs: 2, sm: 3 } }}>
                           <CustomCheckbox 
                             checked={!!student.selected}
                             onChange={() => handleSelectStudent(student.id)}
                             disabled={student.statusId !== "1"}
                             inputProps={{ 'aria-labelledby': student.id }}
+                            sx={{
+                              color: '#334eac',
+                              '&.Mui-checked': {
+                                color: '#334eac',
+                              },
+                              '&.Mui-disabled': {
+                                color: 'rgba(0, 0, 0, 0.26)',
+                              },
+                            }}
                           />
                         </TableCell>
                       )}
@@ -795,74 +1272,271 @@ const ClassroomPage = () => {
               </TableBody>
             </Table>
           </TableContainer>
-          
-          {/* Empty View Guidance */}
+            {/* Empty View Guidance */}
           {students.length === 0 && !loading && (
-            <Box sx={{ p: 4, textAlign: "center" }}>
-              <PersonIcon sx={{ fontSize: 60, color: "text.disabled", mb: 2 }} />
-              <Typography variant="h6" color="text.secondary" gutterBottom>
+            <Box sx={{ p: 6, textAlign: "center" }}>
+              <Avatar 
+                sx={{ 
+                  width: 80,
+                  height: 80,
+                  mx: 'auto',
+                  mb: 3,
+                  bgcolor: 'rgba(51, 78, 172, 0.08)',
+                  color: '#334eac'
+                }}
+              >
+                <PersonIcon sx={{ fontSize: 40 }} />
+              </Avatar>
+              <Typography 
+                variant="h5" 
+                gutterBottom
+                sx={{ 
+                  fontFamily: "var(--font-gilroy)",
+                  fontWeight: 600,
+                  color: "#1e293b",
+                  mb: 2
+                }}
+              >
                 No Students Enrolled
               </Typography>
-              <Typography variant="body2" color="text.secondary" sx={{ mb: 2, maxWidth: 450, mx: "auto" }}>
+              <Typography 
+                variant="body1" 
+                sx={{ 
+                  mb: 4, 
+                  maxWidth: 450, 
+                  mx: "auto",
+                  color: "#64748b",
+                  fontFamily: "var(--font-nunito)",
+                  fontSize: '1.05rem',
+                  lineHeight: 1.5
+                }}
+              >
                 Share the class code with your students so they can join this classroom.
               </Typography>
-              <Box sx={{ mt: 2 }}>
-                <Button 
-                  variant="contained" 
-                  color="primary" 
-                  onClick={copyClassCode}
-                  startIcon={<ContentCopyIcon />}
-                >
-                  Copy Class Code
-                </Button>
-              </Box>
+              <Button 
+                variant="contained" 
+                onClick={copyClassCode}
+                startIcon={<ContentCopyIcon />}
+                sx={{
+                  textTransform: 'none',
+                  bgcolor: '#334eac',
+                  borderRadius: 2,
+                  py: 1.5,
+                  px: 4,
+                  fontFamily: "var(--font-nunito)",
+                  fontWeight: 600,
+                  fontSize: '1rem',
+                  boxShadow: '0 4px 12px rgba(51, 78, 172, 0.2)',
+                  '&:hover': {
+                    bgcolor: '#22357a'
+                  }
+                }}
+              >
+                Copy Class Code
+              </Button>
             </Box>
           )}
         </Card>
-        
-        {/* Confirmation Dialog */}
-        <Dialog open={confirmDialogOpen} onClose={() => setConfirmDialogOpen(false)}>
-          <DialogTitle>
+          {/* Confirmation Dialog */}
+        <Dialog 
+          open={confirmDialogOpen} 
+          onClose={() => setConfirmDialogOpen(false)}
+          PaperProps={{
+            sx: {
+              borderRadius: 3,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+              maxWidth: '450px',
+              width: '100%'
+            }
+          }}
+        >
+          <DialogTitle sx={{ 
+            pb: 1,
+            pt: 3,
+            fontFamily: "var(--font-gilroy)",
+            fontWeight: 600,
+            color: "#1e293b",
+            fontSize: "1.3rem"
+          }}>
             {action === "remove" ? "Remove Student" : "Mark Student as Dropped"}
           </DialogTitle>
           <DialogContent>
-            <DialogContentText>
+            <DialogContentText sx={{ 
+              color: "#64748b",
+              fontFamily: "var(--font-nunito)",
+              fontSize: "1rem",
+              mb: 1
+            }}>
               {action === "remove" 
                 ? "Are you sure you want to remove this student from the classroom? This action cannot be undone."
                 : "Are you sure you want to mark this student as dropped? You can change this later if needed."
               }
             </DialogContentText>
           </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setConfirmDialogOpen(false)}>Cancel</Button>
+          <DialogActions sx={{ px: 3, pb: 3 }}>
+            <Button 
+              onClick={() => setConfirmDialogOpen(false)}
+              sx={{
+                textTransform: "none",
+                fontFamily: "var(--font-nunito)",
+                fontWeight: 600,
+                color: "#64748b",
+                borderRadius: 2,
+                mr: 1,
+                px: 3,
+                '&:hover': {
+                  backgroundColor: "rgba(0,0,0,0.04)"
+                }
+              }}
+            >
+              Cancel
+            </Button>
             <Button 
               onClick={handleConfirmAction} 
               color={action === "remove" ? "error" : "primary"}
               variant="contained"
               autoFocus
+              sx={{
+                textTransform: "none",
+                fontFamily: "var(--font-nunito)",
+                fontWeight: 600,
+                borderRadius: 2,
+                px: 3,
+                bgcolor: action === "remove" ? "#ef4444" : "#334eac",
+                '&:hover': {
+                  bgcolor: action === "remove" ? "#dc2626" : "#22357a"
+                }
+              }}
             >
               Confirm
             </Button>
           </DialogActions>
         </Dialog>
-        
-        {/* Snackbar Notification */}
+          {/* Snackbar Notification */}
         <Snackbar
           open={snackbarOpen}
           autoHideDuration={4000}
           onClose={handleCloseSnackbar}
           anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
           TransitionComponent={Fade}
+          sx={{
+            bottom: { xs: 16, sm: 24 }
+          }}
         >
           <Alert 
             onClose={handleCloseSnackbar} 
             severity={snackbarSeverity} 
             variant="filled"
-            sx={{ width: '100%' }}
+            icon={snackbarSeverity === "success" ? <CheckCircleIcon fontSize="inherit" /> : undefined}
+            sx={{ 
+              width: '100%',
+              borderRadius: 2,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.15)',
+              fontFamily: "var(--font-nunito)",
+              fontWeight: 500,
+              px: 2,
+              py: 1.5,
+              backgroundColor: snackbarSeverity === "success" ? "#10b981" : undefined
+            }}
           >
             {snackbarMessage}
           </Alert>
-        </Snackbar>
+        </Snackbar>        {/* Attendance Calendar Modal */}
+        <Modal
+          open={calendarModalOpen}
+          onClose={handleCloseCalendar}
+          sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1300 }}
+        >
+          <Box sx={{
+            bgcolor: '#ffffff',
+            borderRadius: 3,
+            p: { xs: 2.5, sm: 4 },
+            minWidth: { xs: 320, sm: 640, md: 800 },
+            maxWidth: '90vw',
+            width: { xs: '90vw', sm: '800px' },
+            maxHeight: '90vh',
+            boxShadow: '0 10px 40px rgba(0,0,0,0.1)',
+            position: 'relative',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            border: '1px solid rgba(0,0,0,0.08)',
+            overflowY: 'auto',
+          }}>
+            <IconButton 
+              onClick={handleCloseCalendar} 
+              sx={{ 
+                position: 'absolute', 
+                top: 16, 
+                right: 16,
+                bgcolor: 'rgba(51, 78, 172, 0.08)',
+                color: '#334eac',
+                '&:hover': {
+                  bgcolor: 'rgba(51, 78, 172, 0.15)',
+                }
+              }} 
+              aria-label="Close calendar"
+            >
+              <CloseIcon />
+            </IconButton>
+            
+            <Box sx={{ display: 'flex', alignItems: 'center', mb: 4, width: '100%' }}>
+              <Avatar
+                sx={{ 
+                  bgcolor: '#334eac', 
+                  mr: 2,
+                  width: 44,
+                  height: 44
+                }}
+              >
+                {calendarStudent?.fullName?.charAt(0) || 'A'}
+              </Avatar>
+              <Box>
+                <Typography 
+                  variant="h5" 
+                  sx={{ 
+                    color: '#1e293b', 
+                    fontWeight: 700,
+                    fontFamily: "var(--font-gilroy)",
+                    fontSize: { xs: '1.3rem', sm: '1.5rem' }
+                  }}
+                >
+                  {calendarStudent ? `${calendarStudent.fullName}` : 'Attendance Calendar'}
+                </Typography>
+                {calendarStudent && (
+                  <Typography 
+                    variant="body2" 
+                    sx={{ 
+                      color: '#64748b',
+                      fontFamily: "var(--font-nunito)"
+                    }}
+                  >
+                    Attendance History
+                  </Typography>
+                )}
+              </Box>
+            </Box>
+            
+            {calendarLoading ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '300px' }}>
+                <CircularProgress size={40} sx={{ color: '#334eac' }} />
+              </Box>
+            ) : (
+              <Box sx={{ 
+                width: '100%',
+                p: { xs: 1, sm: 2 },
+                bgcolor: '#f9faff',
+                borderRadius: 2
+              }}>
+                <AttendanceCalendar
+                  year={calendarYear}
+                  month={calendarMonth}
+                  entries={calendarEntries}
+                />
+              </Box>
+            )}
+          </Box>
+        </Modal>
       </Container>
     </Box>
   );
@@ -874,9 +1548,10 @@ interface CheckboxProps {
   onChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
   inputProps?: Record<string, any>;
   disabled?: boolean;
+  sx?: any; // Allow MUI sx styling prop
 }
 
-const CustomCheckbox = ({ checked, onChange, inputProps = {}, disabled = false }: CheckboxProps) => {
+const CustomCheckbox = ({ checked, onChange, inputProps = {}, disabled = false, sx = {} }: CheckboxProps) => {
   return (
     <Box 
       sx={{
@@ -892,7 +1567,8 @@ const CustomCheckbox = ({ checked, onChange, inputProps = {}, disabled = false }
         color: '#fff',
         transition: 'all 0.2s',
         opacity: disabled ? 0.5 : 1,
-        cursor: disabled ? 'default' : 'pointer'
+        cursor: disabled ? 'default' : 'pointer',
+        ...sx // Spread the sx prop to apply custom styles
       }}
       onClick={(e) => {
         if (!disabled) {

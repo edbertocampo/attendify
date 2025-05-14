@@ -1,0 +1,18 @@
+```
++-----------------------------------------------------------+
+|                     ATTENDANCE TIMING                      |
++-----------------------------------------------------------+
+
+Session Start                                      Session End
+     |                                                 |
+     v                                                 v
+     |<---- Grace ---->|<---- Late Period ----->|<-- Absent Window -->|
+     |     Period      |                        |    (30 minutes)     |
+     |   (15 minutes)  |                        |                     |
+     
+     |-----------------|-----------------------|---------------------|
+     
+     Students can      | Students marked as    | Students marked as  |
+     mark normally     | PRESENT but LATE      | ABSENT              |
+     
+```

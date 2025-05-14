@@ -12,7 +12,6 @@ export default function MyThemeProvider({ children }: { children: ReactNode }) {
     const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
     setMode(prefersDark ? "dark" : "light");
   }, []);
-
   const theme = createTheme({
     palette: {
       mode,
@@ -45,6 +44,123 @@ export default function MyThemeProvider({ children }: { children: ReactNode }) {
         secondary: mode === 'dark' ? '#b0b8c1' : '#64748b',
       },
     },
+    typography: {
+      fontFamily: [
+        'var(--font-gilroy)',
+        '-apple-system',
+        'BlinkMacSystemFont',
+        '"Segoe UI"',
+        'Roboto',
+        'Arial',
+        'sans-serif',
+      ].join(','),
+      h1: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 700,
+      },
+      h2: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 700,
+      },
+      h3: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 600,
+      },
+      h4: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 600,
+      },
+      h5: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 600,
+      },
+      h6: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 600,
+      },
+      subtitle1: {
+        fontFamily: 'var(--font-nunito)',
+      },
+      subtitle2: {
+        fontFamily: 'var(--font-nunito)',
+      },
+      body1: {
+        fontFamily: 'var(--font-gilroy)',
+      },
+      body2: {
+        fontFamily: 'var(--font-nunito)',
+      },
+      button: {
+        fontFamily: 'var(--font-gilroy)',
+        fontWeight: 600,
+      },
+    },    components: {
+      MuiCssBaseline: {
+        styleOverrides: {
+          body: {
+            scrollbarWidth: 'thin',
+            '&::-webkit-scrollbar': {
+              width: '8px',
+              height: '8px',
+            },
+            '&::-webkit-scrollbar-thumb': {
+              backgroundColor: mode === 'dark' ? '#334eac80' : '#33333380',
+              borderRadius: '4px',
+            },
+          }
+        }
+      },
+      MuiInput: {
+        styleOverrides: {
+          root: {
+            fontFamily: 'var(--font-nunito)',
+          }
+        }
+      },
+      MuiInputLabel: {
+        styleOverrides: {
+          root: {
+            fontFamily: 'var(--font-nunito)',
+          }
+        }
+      },
+      MuiTextField: {
+        styleOverrides: {
+          root: {
+            '& .MuiInputBase-input': {
+              fontFamily: 'var(--font-nunito)',
+            }
+          }
+        }
+      },
+      MuiButton: {
+        styleOverrides: {
+          root: {
+            fontFamily: 'var(--font-gilroy)',
+            fontWeight: 600,
+            letterSpacing: '0.02em',
+          }
+        }
+      },
+      MuiTableCell: {
+        styleOverrides: {
+          head: {
+            fontFamily: 'var(--font-gilroy)',
+            fontWeight: 600,
+          },
+          body: {
+            fontFamily: 'var(--font-nunito)',
+          }
+        }
+      },
+      MuiChip: {
+        styleOverrides: {
+          label: {
+            fontFamily: 'var(--font-nunito)',
+          }
+        }
+      },
+    }
   });
 
   return (

@@ -24,6 +24,8 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import AttendanceCalendar from '@/components/AttendanceCalendar';
+import { getFirestore } from 'firebase/firestore';
+import { createAttendanceSubmissionNotification } from '../../../../../lib/notificationService';
 
 interface Subject {
   code: string;
@@ -151,7 +153,7 @@ const ClassroomPage = () => {
         );
         const snapshot = await getDocs(attendanceQuery);
         const entries = snapshot.docs
-          .map(docSnap => {
+          .map((docSnap) => {
             const data = docSnap.data();
             if (data.proofImage) {
               return {
@@ -171,7 +173,7 @@ const ClassroomPage = () => {
             }
             return undefined;
           })
-          .filter((e): e is AttendanceEntry => !!e);
+          .filter((e: AttendanceEntry | undefined): e is AttendanceEntry => !!e);
         setAttendanceEntries(entries);
       } catch (e) {
         setAttendanceEntries([]);
@@ -461,62 +463,341 @@ const ClassroomPage = () => {
         }
       }
 
-      let graceEndTime: Date | undefined;
-      // If this is an attendance submission (not excuse), check time
-      if (attendanceImage) {
-        setSubmitStatus({
-          type: 'info',
-          message: 'Checking attendance time...'
-        });
+      // NEW LOGIC FOR STATUS DETERMINATION AND TIME VALIDATION
+      // 'now' and 'classData' are already defined and in scope from earlier in the function.
+      let determinedStatus: string = '';
+      let graceEndTimeForPresentLate: Date | undefined;
+      let sessionTimeValidationRequired = false;
 
-        // --- MULTI-SESSION SUPPORT ---
+      if (attendanceImage) {
+        sessionTimeValidationRequired = true;
+        // Status ('present' or 'late') will be set after time validation.
+      } else if (excuse) {
+        determinedStatus = 'excused';
+        // No strict time validation needed for excuses for the act of submission itself.
+      } else {
+        // Neither image nor excuse. If the student reaches this point and submits,
+        // it's treated as an active "absent" submission which should be time-bound.
+        // The initial check `if (!attendanceImage && !excuse)` at the start of handleSubmitAttendance
+        // already prompts the user, so if they proceed, this is the intent.
+        determinedStatus = 'absent'; // Tentative status, confirmed if time check passes.
+        sessionTimeValidationRequired = true;
+      }
+
+      if (sessionTimeValidationRequired) {
+        setSubmitStatus({ type: 'info', message: 'Checking attendance time...' });
+
         const sessions = classData.sessions || [];
-        const daysOfWeek = [
-          'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
-        ];
+        const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         const todayDay = daysOfWeek[now.getDay()];
         const todaySession = sessions.find((session: any) => session.day === todayDay);
 
         if (!todaySession) {
-          setSubmitStatus({
-            type: 'error',
-            message: 'No session scheduled for today. Attendance cannot be submitted.'
-          });
+          setSubmitStatus({ type: 'error', message: 'No session scheduled for today. Attendance cannot be submitted.' });
           return;
         }
 
-        // Parse session start and end times (assume "HH:mm" 24-hour format)
-        const [startHour, startMinute] = todaySession.startTime.split(':').map(Number);
-        const [endHour, endMinute] = todaySession.endTime.split(':').map(Number);
+        // Debug session time information
+        console.log('Session time data:', {
+          day: todayDay,
+          startTime: todaySession.startTime,
+          endTime: todaySession.endTime,
+          timeFormat: todaySession.timeFormat || '24hr' // Check if AM/PM format is specified
+        });
+
+        // Parse time strings which may be in different formats
+        let startHour, startMinute, endHour, endMinute;
+        
+        // Function to parse time strings in various formats
+        const parseTimeString = (timeStr: string) => {
+          // Normalize the time string - remove any extra spaces and make lowercase
+          const normalizedTime = timeStr.toLowerCase().trim();
+          console.log('Parsing time string:', normalizedTime);
+          
+          // Case 1: Format like "7 am" or "7 pm" (no minutes)
+          if (/^\d+\s*(am|pm)$/.test(normalizedTime)) {
+            const match = normalizedTime.match(/^(\d+)\s*(am|pm)$/);
+            if (match) {
+              let hour = parseInt(match[1], 10);
+              const period = match[2];
+              
+              console.log(`Parsing time: ${hour} ${period}`);
+              
+              // Adjust for PM
+              if (period === 'pm' && hour < 12) {
+                hour += 12;
+                console.log(`Adjusted to PM: ${hour}`);
+              }
+              // Adjust for 12 AM
+              if (period === 'am' && hour === 12) {
+                hour = 0;
+                console.log(`Adjusted 12 AM to: ${hour}`);
+              }
+              
+              console.log(`Final parsed value: ${hour}:00`);
+              return { hour, minute: 0 };
+            }
+          }
+          
+          // Case 2: Format like "7:00 am" or "7:00 pm" (with minutes and space)
+          if (/^\d+:\d+\s*(am|pm)$/.test(normalizedTime)) {
+            const match = normalizedTime.match(/^(\d+):(\d+)\s*(am|pm)$/);
+            if (match) {
+              let hour = parseInt(match[1], 10);
+              const minute = parseInt(match[2], 10);
+              const period = match[3];
+              
+              // Adjust for PM
+              if (period === 'pm' && hour < 12) {
+                hour += 12;
+              }
+              // Adjust for 12 AM
+              if (period === 'am' && hour === 12) {
+                hour = 0;
+              }
+              
+              return { hour, minute };
+            }
+          }
+          
+          // Case 3: Format like "7:00am" or "7:00pm" (with minutes, no space)
+          if (/^\d+:\d+(am|pm)$/.test(normalizedTime)) {
+            const match = normalizedTime.match(/^(\d+):(\d+)(am|pm)$/);
+            if (match) {
+              let hour = parseInt(match[1], 10);
+              const minute = parseInt(match[2], 10);
+              const period = match[3];
+              
+              console.log(`Parsing time format 3: ${hour}:${minute} ${period}`);
+              
+              // Adjust for PM
+              if (period === 'pm' && hour < 12) {
+                hour += 12;
+                console.log(`Adjusted to PM: ${hour}`);
+              }
+              // Adjust for 12 AM
+              if (period === 'am' && hour === 12) {
+                hour = 0;
+                console.log(`Adjusted 12 AM to: ${hour}`);
+              }
+              
+              console.log(`Final parsed value: ${hour}:${minute}`);
+              return { hour, minute };
+            }
+          }
+          
+          // Case 3b: Format like "7am" or "6pm" (no minutes, no space)
+          if (/^\d+(am|pm)$/.test(normalizedTime)) {
+            const match = normalizedTime.match(/^(\d+)(am|pm)$/);
+            if (match) {
+              let hour = parseInt(match[1], 10);
+              const period = match[2];
+              
+              console.log(`Parsing time format 3b: ${hour} ${period}`);
+              
+              // Adjust for PM
+              if (period === 'pm' && hour < 12) {
+                hour += 12;
+                console.log(`Adjusted to PM: ${hour}`);
+              }
+              // Adjust for 12 AM
+              if (period === 'am' && hour === 12) {
+                hour = 0;
+                console.log(`Adjusted 12 AM to: ${hour}`);
+              }
+              
+              console.log(`Final parsed value: ${hour}:00`);
+              return { hour, minute: 0 };
+            }
+          }
+          
+          // Case 4: Standard 24-hour format like "7:00" or "18:00"
+          if (/^\d+:\d+$/.test(normalizedTime)) {
+            const [hourStr, minuteStr] = normalizedTime.split(':');
+            return {
+              hour: parseInt(hourStr, 10),
+              minute: parseInt(minuteStr, 10)
+            };
+          }
+          
+          // Case 5: Just a number (assume it's an hour with 0 minutes)
+          if (/^\d+$/.test(normalizedTime)) {
+            return {
+              hour: parseInt(normalizedTime, 10),
+              minute: 0
+            };
+          }
+          
+          // If no format matches, try a generic approach as a fallback
+          console.warn('Unrecognized time format, attempting fallback parsing:', timeStr);
+          
+          // Try to extract numbers and am/pm
+          const hourMatch = normalizedTime.match(/(\d+)/);
+          const isPM = normalizedTime.includes('pm');
+          
+          if (hourMatch) {
+            let hour = parseInt(hourMatch[1], 10);
+            
+            // Apply AM/PM logic if detected
+            if (isPM && hour < 12) {
+              hour += 12;
+              console.log(`Fallback: Adjusted to PM: ${hour}`);
+            }
+            
+            if (!isPM && hour === 12) {
+              hour = 0;
+              console.log(`Fallback: Adjusted 12 AM to: ${hour}`);
+            }
+            
+            console.log(`Fallback parsing result: ${hour}:00`);
+            return { hour, minute: 0 };
+          }
+          
+          console.error('Failed to parse time format:', timeStr);
+          return { hour: NaN, minute: NaN };
+        };
+        
+        // Parse the start time - handling additional edge cases
+        let startTimeParsed;
+        try {
+          startTimeParsed = parseTimeString(todaySession.startTime);
+          
+          // Extra validation for common edge cases
+          if (isNaN(startTimeParsed.hour)) {
+            // Try alternative parsing approach for "7am" (without space)
+            const simpleMatch = todaySession.startTime.toLowerCase().match(/(\d+)(am|pm)/);
+            if (simpleMatch) {
+              let hour = parseInt(simpleMatch[1], 10);
+              const period = simpleMatch[2];
+              
+              if (period === 'pm' && hour < 12) {
+                hour += 12;
+              }
+              if (period === 'am' && hour === 12) {
+                hour = 0;
+              }
+              
+              startTimeParsed = { hour, minute: 0 };
+              console.log('Emergency parsing for start time worked:', startTimeParsed);
+            }
+          }
+        } catch (e) {
+          console.error('Start time parsing error:', e);
+          startTimeParsed = { hour: 7, minute: 0 }; // Default to 7am if parsing completely fails
+          console.log('Using default start time 7:00');
+        }
+        
+        startHour = startTimeParsed.hour;
+        startMinute = startTimeParsed.minute;
+        
+        // Parse the end time with same robustness
+        let endTimeParsed;
+        try {
+          endTimeParsed = parseTimeString(todaySession.endTime);
+          
+          // Extra validation for common edge cases
+          if (isNaN(endTimeParsed.hour)) {
+            // Try alternative parsing approach for "6pm" (without space)
+            const simpleMatch = todaySession.endTime.toLowerCase().match(/(\d+)(am|pm)/);
+            if (simpleMatch) {
+              let hour = parseInt(simpleMatch[1], 10);
+              const period = simpleMatch[2];
+              
+              if (period === 'pm' && hour < 12) {
+                hour += 12;
+              }
+              if (period === 'am' && hour === 12) {
+                hour = 0;
+              }
+              
+              endTimeParsed = { hour, minute: 0 };
+              console.log('Emergency parsing for end time worked:', endTimeParsed);
+            }
+          }
+        } catch (e) {
+          console.error('End time parsing error:', e);
+          endTimeParsed = { hour: 18, minute: 0 }; // Default to 6pm if parsing completely fails
+          console.log('Using default end time 18:00');
+        }
+        
+        endHour = endTimeParsed.hour;
+        endMinute = endTimeParsed.minute;
+
+        console.log('Parsed time values:', {
+          start: { hour: startHour, minute: startMinute },
+          end: { hour: endHour, minute: endMinute }
+        });
+
+        if (isNaN(startHour) || isNaN(startMinute) || isNaN(endHour) || isNaN(endMinute)) {
+            console.error('Invalid time format detected:', { startHour, startMinute, endHour, endMinute });
+            setSubmitStatus({ type: 'error', message: 'Invalid session time format in class data.' });
+            return;
+        }
 
         const classStartTime = new Date(now);
         classStartTime.setHours(startHour, startMinute, 0, 0);
-
         const classEndTime = new Date(now);
         classEndTime.setHours(endHour, endMinute, 0, 0);
+        
+        // More detailed time comparison for debugging
+        console.log('Time comparison:', {
+          now: now.toLocaleTimeString(),
+          nowHour: now.getHours(),
+          nowMinute: now.getMinutes(),
+          nowTimestamp: now.getTime(),
+          classStartTime: classStartTime.toLocaleTimeString(),
+          classStartHour: classStartTime.getHours(),
+          classStartMinute: classStartTime.getMinutes(),
+          classStartTimestamp: classStartTime.getTime(),
+          classEndTime: classEndTime.toLocaleTimeString(),
+          classEndHour: classEndTime.getHours(),
+          classEndMinute: classEndTime.getMinutes(),
+          classEndTimestamp: classEndTime.getTime(),
+          isBeforeStart: now < classStartTime,
+          isAfterEnd: now > classEndTime
+        });
 
-        graceEndTime = new Date(classStartTime.getTime() + 15 * 60000); // Add 15 minutes
-
-        // Check if outside class hours for attendance submission
+        if (isNaN(classStartTime.getTime()) || isNaN(classEndTime.getTime())) {
+            console.error('Invalid Date objects:', { classStartTime, classEndTime });
+            setSubmitStatus({ type: 'error', message: 'Failed to calculate class session times.' });
+            return;
+        }
+        
+        // Core check: is 'now' within the session window?
         if (now < classStartTime || now > classEndTime) {
-          setSubmitStatus({
-            type: 'error',
-            message: `Attendance can only be submitted between ${todaySession.startTime} - ${todaySession.endTime}`
+          console.log('Time check failed, outside class hours:', {
+            beforeStart: now < classStartTime,
+            afterEnd: now > classEndTime,
+            nowTime: now.getTime(),
+            startTime: classStartTime.getTime(),
+            endTime: classEndTime.getTime(),
+            timeDiffToStart: classStartTime.getTime() - now.getTime(),
+            timeDiffToEnd: now.getTime() - classEndTime.getTime()
           });
+          setSubmitStatus({ type: 'error', message: `Attendance can only be submitted between ${todaySession.startTime} - ${todaySession.endTime}` });
           return;
         }
-        // --- END MULTI-SESSION SUPPORT ---
+        
+        console.log('Time check passed, within class hours');
+
+        // If time validation passed and it was an image submission:
+        if (attendanceImage) {
+          graceEndTimeForPresentLate = new Date(classStartTime.getTime() + 15 * 60000); // 15 minutes grace period
+          determinedStatus = (now <= graceEndTimeForPresentLate) ? 'present' : 'late';
+        }
+        // If it was an 'absent' submission (no image, no excuse), 
+        // determinedStatus is already 'absent' and has now passed the time validation.
       }
 
-      // Determine attendance status
-      let status;
-      if (attendanceImage) {
-        status = graceEndTime && now <= graceEndTime ? 'present' : 'late';
-      } else if (excuse) {
-        status = 'excused';
-      } else {
-        status = 'absent';
+      const status = determinedStatus;
+
+      if (!status) {
+        // This safeguard implies that none of the paths (image, excuse, or active absent)
+        // resulted in a determined status. This should ideally not be reached.
+        setSubmitStatus({ type: 'error', message: 'Could not determine attendance status. Please check inputs and try again.' });
+        return;
       }
+      // END OF NEW LOGIC
 
       setSubmitStatus({
         type: 'info',
@@ -525,7 +806,7 @@ const ClassroomPage = () => {
 
       // Add attendance record to Firestore
       const attendanceRef = collection(db, 'attendance');
-      await addDoc(attendanceRef, {
+      const attendanceDoc = await addDoc(attendanceRef, {
         classCode,
         studentId: auth.currentUser.uid,
         studentName,
@@ -539,6 +820,17 @@ const ClassroomPage = () => {
         isLate: status === 'late',
         geolocation: geo // { latitude, longitude } or null
       });
+
+      // Create notification for the attendance submission
+      await createAttendanceSubmissionNotification(
+        auth.currentUser.uid,
+        status as 'present' | 'late' | 'excused' | 'absent',
+        classCode,
+        className,
+        subjectCode ? currentSubject?.name || null : null,
+        attendanceDoc.id,
+        now
+      );
 
       setSubmitStatus({
         type: 'success',
@@ -604,8 +896,8 @@ const ClassroomPage = () => {
   return (
     <Box sx={{ 
       minHeight: '100vh',
-      backgroundColor: '#f4f7fd', // Set to white
-      color: '#222', // Set dark font color for all text
+      backgroundColor: '#f7fafd',
+      color: '#222',
       p: { xs: 1, sm: 3 },
     }}>
       {/* Header */}
@@ -613,7 +905,7 @@ const ClassroomPage = () => {
         p: { xs: 2, sm: 4 }, 
         borderBottom: '1px solid',
         borderColor: 'divider',
-        backgroundColor: '#f4f7fd',
+        backgroundColor: '#f7fafd',
         maxWidth: '1200px',
         margin: '0 auto',
       }}>
@@ -628,11 +920,11 @@ const ClassroomPage = () => {
             alignItems: 'flex-start',
             gap: 0.5,
           }}>
-            <Typography variant="h4" fontWeight="bold" sx={{ letterSpacing: 1, color: '#222', mb: 0 }}>
+            <Typography variant="h4" fontWeight="bold" sx={{ letterSpacing: 1, color: '#222', mb: 0, fontFamily: 'var(--font-gilroy)' }}>
               {className}
             </Typography>
             {currentSubject && (
-              <Typography variant="subtitle1" sx={{ color: 'text.secondary', fontWeight: 500 }}>
+              <Typography variant="subtitle1" sx={{ color: 'text.secondary', fontWeight: 500, fontFamily: 'var(--font-nunito)' }}>
                 {currentSubject.name} - {currentSubject.instructor}
               </Typography>
             )}
@@ -654,7 +946,7 @@ const ClassroomPage = () => {
         {(absenceCount === 2 || absenceCount >= 3) && (
           <Alert 
             severity={absenceCount >= 3 ? 'error' : 'warning'}
-            sx={{ mb: 3, fontWeight: 'bold', fontSize: '1.1rem' }}
+            sx={{ mb: 3, fontWeight: 'bold', fontSize: '1.1rem', borderRadius: 2, fontFamily: 'var(--font-nunito)' }}
           >
             {absenceCount === 2 && 'You are close to having 3 absences. Please be mindful and communicate with your instructor if needed.'}
             {absenceCount >= 3 && 'You have 3 or more absences. Please communicate with your instructor as soon as possible.'}
@@ -678,14 +970,14 @@ const ClassroomPage = () => {
               </Box>
             )}
             <Box sx={{ maxWidth: '800px', margin: '0 auto' }}>
-              <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ mb: 2, color: '#222' }}>
+              <Typography variant="h5" fontWeight="bold" gutterBottom sx={{ mb: 2, color: '#222', fontFamily: 'var(--font-gilroy)' }}>
                 Attendance Submission
               </Typography>
-              <Box sx={{ mb: 4, p: 3, border: '1px solid', borderColor: 'divider', borderRadius: 3, background: '#f9fafb' }}>
-                <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#222' }}>
+              <Box sx={{ mb: 4, p: 3, border: '1px solid #e5e7eb', borderRadius: 2, background: '#f9fafb' }}>
+                <Typography variant="h6" fontWeight="bold" gutterBottom sx={{ color: '#222', fontFamily: 'var(--font-gilroy)' }}>
                   Take Attendance Photo
                 </Typography>
-                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 2, fontFamily: 'var(--font-nunito)' }}>
                   Please take a clear photo of yourself for attendance. Make sure your face is visible and well-lit.
                 </Typography>
                 <Button
@@ -698,7 +990,7 @@ const ClassroomPage = () => {
                     height: '56px',
                     fontSize: { xs: '0.95rem', sm: '1.1rem' },
                     fontWeight: 'bold',
-                    borderRadius: '12px',
+                    borderRadius: '10px',
                     bgcolor: '#334eac',
                     '&:hover': { bgcolor: '#22336b' }
                   }}
@@ -729,12 +1021,12 @@ const ClassroomPage = () => {
                     {isLocating ? (
                       <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
                         <CircularProgress size={24} sx={{ mr: 1 }} />
-                        <Typography variant="body2" color="text.secondary">
+                        <Typography variant="body2" color="text.secondary" sx={{ fontFamily: 'var(--font-nunito)' }}>
                           Fetching location...
                         </Typography>
                       </Box>
                     ) : geolocation && (
-                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontFamily: 'var(--font-nunito)' }}>
                         Location: {geolocation.latitude.toFixed(6)}, {geolocation.longitude.toFixed(6)}
                         {placeName && (
                           <span> (<b>{placeName}</b>)</span>
@@ -779,7 +1071,7 @@ const ClassroomPage = () => {
                 backgroundColor: '#fff',
                 mb: 2
               }}>
-                <Typography variant="subtitle1" fontWeight={500} gutterBottom>
+                <Typography variant="subtitle1" fontWeight={500} gutterBottom sx={{ fontFamily: 'var(--font-gilroy)' }}>
                   Submit Excuse Letter
                 </Typography>
                 <TextField
@@ -813,7 +1105,7 @@ const ClassroomPage = () => {
                   </Button>
                   {excuseFile && (
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, bgcolor: 'transparent', p: 0 }}>
-                      <Typography variant="body2" sx={{ fontSize: 13, color: 'text.secondary', wordBreak: 'break-all' }}>
+                      <Typography variant="body2" sx={{ fontSize: 13, color: 'text.secondary', wordBreak: 'break-all', fontFamily: 'var(--font-nunito)' }}>
                         {excuseFile.name}
                       </Typography>
                       <IconButton size="small" color="error" onClick={() => { setExcuseFile(null); if (fileInputRef.current) fileInputRef.current.value = ''; }} aria-label="Remove uploaded file">
@@ -830,7 +1122,7 @@ const ClassroomPage = () => {
                 >
                   Drag & drop file here
                 </Box>
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontSize: 11 }}>
+                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontSize: 11, fontFamily: 'var(--font-nunito)' }}>
                   PDF, DOC, DOCX, JPG, PNG. Max 5MB.
                 </Typography>
               </Box>
@@ -844,7 +1136,7 @@ const ClassroomPage = () => {
                 sx={{
                   mt: 4,
                   fontWeight: 'bold',
-                  borderRadius: '14px',
+                  borderRadius: '12px',
                   height: '56px',
                   fontSize: { xs: '0.95rem', sm: '1.1rem' },
                   bgcolor: '#334eac',
@@ -925,6 +1217,12 @@ const ClassroomPage = () => {
           autoHideDuration={4000}
           onClose={handleSnackbarClose}
           anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+          sx={{
+            '& .MuiPaper-root': {
+              borderRadius: 2,
+              bgcolor: 'rgba(255,255,255,0.98)'
+            }
+          }}
         >
           <Alert
             severity={submitStatus.type || 'info'}

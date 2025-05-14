@@ -136,12 +136,11 @@ export default function SignupPage() {
               marginBottom: "24px",
               animation: "fadeIn 0.6s ease-out",
             }}
-          />
-
-          <Typography 
+          />          <Typography 
             variant="h4" 
             component="h1" 
             sx={{
+              fontFamily: 'var(--font-gilroy)',
               fontWeight: 700,
               fontSize: { xs: "24px", sm: "28px" },
               mb: 1,
@@ -151,11 +150,10 @@ export default function SignupPage() {
             }}
           >
             Create Account
-          </Typography>
-
-          <Typography 
+          </Typography>          <Typography 
             variant="body1" 
             sx={{ 
+              fontFamily: 'var(--font-nunito)',
               mb: 4, 
               color: "text.secondary",
               fontSize: "15px" 
