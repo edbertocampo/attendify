@@ -37,6 +37,7 @@ const ClientSideWrapper = dynamic(() => Promise.resolve(({ children }: { childre
 export default function InstructorDashboard() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
+  const [navigating, setNavigating] = useState(false);
   const [classroomName, setClassroomName] = useState("");
   const [description, setDescription] = useState("");
   const [createdClassroomId, setCreatedClassroomId] = useState<string | null>(null);
@@ -519,6 +520,7 @@ export default function InstructorDashboard() {
   return (
     <ClientSideWrapper>
       {isLoading && <LoadingOverlay isLoading={isLoading} message="Loading dashboard..." />}
+      {navigating && <LoadingOverlay isLoading={navigating} message="Opening classroom..." />}
       <Box
         sx={{
           display: 'flex',
@@ -932,7 +934,10 @@ export default function InstructorDashboard() {
                           bgcolor: 'rgba(255,255,255,0.99)',
                         }
                       }}
-                      onClick={() => router.push(`/classroom/${classroom.id}`)}
+                      onClick={() => {
+                        setNavigating(true);
+                        router.push(`/classroom/${classroom.id}`);
+                      }}
                     >
                       <Box sx={{ mb: 'auto', position: 'relative' }}>
                         <Box sx={{ position: 'absolute', right: -8, top: -8, display: 'flex', zIndex: 2 }}>
@@ -1410,6 +1415,7 @@ export default function InstructorDashboard() {
         </Box>
       </Box>
       {isLoading && <LoadingOverlay isLoading={isLoading} message="Loading dashboard..." />}
+      {/*navigating && <LoadingOverlay isLoading={navigating} message="Opening classroom..." />*/}
       
       {/* Snackbar for notifications */}
       <Snackbar

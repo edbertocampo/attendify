@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { db } from "../../../lib/firebase";
-import { collection, getDocs, query, where, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, getDoc } from "firebase/firestore";
+import { collection, getDocs, query, where, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, getDoc, Timestamp } from "firebase/firestore";
 import { 
   Box, Typography, IconButton, Table, TableBody, TableCell, 
   TableContainer, TableHead, TableRow, Paper, Tooltip, CircularProgress, 
@@ -12,7 +12,7 @@ import {
   Divider, Alert, Snackbar, TextField, InputAdornment, Fade,
   FormControl, InputLabel, Menu, ListItemIcon, ListItemText,
   ToggleButtonGroup, ToggleButton, Badge, useMediaQuery, useTheme,
-  Checkbox, Modal
+  Checkbox, Modal, Stack, FormControlLabel
 } from "@mui/material";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import PersonIcon from "@mui/icons-material/Person";
@@ -34,6 +34,7 @@ import CloseIcon from "@mui/icons-material/Close";
 import LoadingOverlay from "../../../components/LoadingOverlay";
 import AttendanceCalendar from '../../../components/AttendanceCalendar';
 import dayjs from 'dayjs';
+import { Timestamp as FirestoreTimestamp } from 'firebase/firestore'; // Ensure this import is correct based on your setup
 
 interface Student {
   id: string;
@@ -50,9 +51,29 @@ interface Student {
 
 interface AttendanceEntry {
   date: string; // Format: 'YYYY-MM-DD'
-  type: 'image' | 'file';
-  url: string;
+  type: 'image' | 'file' | 'absent'; // MODIFIED: Added 'absent'
+  url?: string; // MODIFIED: Made url optional
   fileName?: string;
+  geolocation?: { latitude: number; longitude: number } | null;
+}
+
+// Interface for raw attendance records from Firestore
+interface RawAttendanceRecord {
+  id: string; // Firestore document ID of the attendance record
+  studentId: string;
+  present: boolean;
+  status?: 'absent' | 'present' | 'late' | 'excused'; // status can be optional or have more values
+  excuseFile?: string | null;
+  proofImage?: string | null;
+  timestamp: Date | null;
+  date: string; // YYYY-MM-DD
+  // Add any other fields that are expected from the attendance collection
+  classCode: string;
+  classroomId: string;
+  studentName?: string;
+  submittedTime?: any; // Or a more specific type like Date | null
+  isLate?: boolean;
+  excuse?: string | null;
   geolocation?: { latitude: number; longitude: number } | null;
 }
 
@@ -88,6 +109,16 @@ const ClassroomPage = () => {
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarYear, setCalendarYear] = useState(dayjs().year());
   const [calendarMonth, setCalendarMonth] = useState(dayjs().month() + 1); // dayjs month is 0-based
+  const [todaySession, setTodaySession] = useState<any>(null);
+  const [markAbsentDialogOpen, setMarkAbsentDialogOpen] = useState(false);
+  const [markAbsentStudent, setMarkAbsentStudent] = useState<Student | null>(null);
+  const [markAbsentLoading, setMarkAbsentLoading] = useState(false);
+  const [markAbsentError, setMarkAbsentError] = useState<string>("");
+  // Bulk Mark Absent state
+  const [bulkAbsentDialogOpen, setBulkAbsentDialogOpen] = useState(false);
+  const [bulkAbsentLoading, setBulkAbsentLoading] = useState(false);
+  const [bulkAbsentError, setBulkAbsentError] = useState<string>("");
+  const [bulkAbsentSelected, setBulkAbsentSelected] = useState<string[]>([]); // student ids
 
   useEffect(() => {
     if (!classCode) return;
@@ -98,13 +129,10 @@ const ClassroomPage = () => {
         // Fetch classroom details
         const classroomsQuery = query(collection(db, "classrooms"), where("classCode", "==", classCode));
         const classroomSnapshot = await getDocs(classroomsQuery);
-        
+        let classroomData = null;
         if (!classroomSnapshot.empty) {
           const classroomDoc = classroomSnapshot.docs[0];
-          const classroomData = classroomDoc.data();
-          console.log("Retrieved classroom data:", classroomData);
-          
-          // Make sure to use the right field from your Firestore document
+          classroomData = classroomDoc.data();
           setClassroomName(classroomData.name || "Unnamed Classroom");
           setClassroomId(classroomDoc.id);
         } else {
@@ -116,7 +144,7 @@ const ClassroomPage = () => {
             const classroomDocSnap = await getDoc(classroomDocRef);
             
             if (classroomDocSnap.exists()) {
-              const classroomData = classroomDocSnap.data();
+              classroomData = classroomDocSnap.data(); // <-- assign to outer variable, not const
               console.log("Retrieved classroom by ID:", classroomData);
               setClassroomName(classroomData.name || "Unnamed Classroom");
               setClassroomId(classroomDocSnap.id);
@@ -126,6 +154,22 @@ const ClassroomPage = () => {
           } catch (error) {
             console.error("Error fetching classroom by ID:", error);
           }
+        }
+
+        // --- Find today's session (robust day matching) ---
+        if (classroomData && Array.isArray(classroomData.sessions)) {
+          const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+          const todayDay = daysOfWeek[new Date().getDay()];
+          const session = classroomData.sessions.find((s) => {
+            if (!s.day) return false;
+            // Normalize both sides: trim, lowercase
+            const sessionDay = s.day.trim().toLowerCase();
+            const normalizedToday = todayDay.trim().toLowerCase();
+            return sessionDay === normalizedToday;
+          });
+          setTodaySession(session || null);
+        } else {
+          setTodaySession(null);
         }
 
         // Fetch students
@@ -144,35 +188,100 @@ const ClassroomPage = () => {
         const attendanceQuery = query(collection(db, "attendance"), where("classCode", "==", classCode));
         const attendanceSnapshot = await getDocs(attendanceQuery);
         
-        const attendanceRecords = attendanceSnapshot.docs.map(doc => doc.data());
+        // Convert all attendance records, making sure timestamp is a JS Date
+        const allAttendanceRecords: RawAttendanceRecord[] = attendanceSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id, // Firestore document ID of the attendance record
+            ...data,
+            timestamp: data.timestamp?.toDate ? data.timestamp.toDate() : null,
+            // Ensure all fields accessed later are explicitly typed here or in RawAttendanceRecord
+            studentId: data.studentId,
+            present: data.present,
+            status: data.status,
+            excuseFile: data.excuseFile,
+            proofImage: data.proofImage,
+            date: data.date, 
+            classCode: data.classCode,
+            classroomId: data.classroomId,
+            studentName: data.studentName,
+            submittedTime: data.submittedTime,
+            isLate: data.isLate,
+            excuse: data.excuse,
+            geolocation: data.geolocation,
+          } as RawAttendanceRecord; // Added type assertion
+        });
         
         const studentsData = querySnapshot.docs.map((doc) => {
-          const studentData = doc.data();
+          const studentDocData = doc.data();
+          const studentAuthId = studentDocData.studentId; // Firebase Auth UID
+          const studentDocId = doc.id; // Firestore document ID of the student
+
+          // Use Auth UID if available, otherwise fallback to student document ID for matching records
+          const studentIdentifier = studentAuthId || studentDocId;
+
+          // Filter all attendance records for the current student
+          const studentRecords = allAttendanceRecords.filter(record => record.studentId === studentIdentifier);
+
+          // Calculate stats using these filtered records
+          const currentAbsenceCount = studentRecords.filter(record => record.present === false).length;
           
-          // Calculate attendance percentage
-          const studentAttendance = attendanceRecords.filter(record => 
-            record.studentId === doc.id
-          );
-          
-          const attendancePercentage = studentAttendance.length > 0 
-            ? (studentAttendance.filter(record => record.present).length / studentAttendance.length) * 100
+          const attendancePercentage = studentRecords.length > 0 
+            ? (studentRecords.filter(record => record.present === true).length / studentRecords.length) * 100
             : 0;
           
-          // Count absences (present === false)
-          const absenceCount = studentAttendance.filter(record => record.present === false).length;
+          // Determine last attendance string
+          let lastAttendanceString = "No record";
+          if (studentRecords.length > 0) {
+            const sortedRecords = [...studentRecords].sort((a, b) => {
+              if (a.timestamp && b.timestamp) {
+                return b.timestamp.getTime() - a.timestamp.getTime();
+              }
+              if (a.timestamp) return -1; // a comes first if b.timestamp is null
+              if (b.timestamp) return 1;  // b comes first if a.timestamp is null
+              return 0;
+            });
+            const lastRecord = sortedRecords[0];
+
+            if (lastRecord && lastRecord.timestamp) {
+              const lastDate = dayjs(lastRecord.timestamp);
+              const now = dayjs();
+              let datePart = "";
+
+              if (lastDate.isSame(now, 'day')) {
+                datePart = `Today, ${lastDate.format('h:mm A')}`;
+              } else if (lastDate.isSame(now.subtract(1, 'day'), 'day')) {
+                datePart = `Yesterday, ${lastDate.format('h:mm A')}`;
+              } else {
+                datePart = lastDate.format('MMM D, YYYY, h:mm A');
+              }
+
+              let statusPart = "";
+              if (lastRecord.status === 'absent') {
+                statusPart = " (Absent)";
+              } else if (lastRecord.excuseFile) {
+                statusPart = " (Excuse Submitted)";
+              } else if (lastRecord.present === true) {
+                statusPart = " (Present)";
+              } else if (lastRecord.present === false) {
+                statusPart = " (Not Present)"; // Should ideally be covered by 'absent'
+              }
+              lastAttendanceString = datePart + statusPart;
+            }
+          }
           
-          // Get user information using studentId which maps to user's id
-          const userData = usersMap.get(studentData.studentId);
+          // Get user information using studentAuthId (Firebase Auth UID)
+          const userData = usersMap.get(studentAuthId); 
             return {
-            id: doc.id,
-            studentId: studentData.studentId, // Add the actual studentId from Firestore
-            fullName: studentData.fullName || "Unknown",
-            statusId: studentData.statusId || "1", // Default to "Enrolled"
+            id: studentDocId, // Student document ID
+            studentId: studentAuthId, // Firebase Auth UID
+            fullName: studentDocData.fullName || "Unknown",
+            statusId: studentDocData.statusId || "1", // Default to "Enrolled"
             email: userData?.email || "No email provided",
-            lastAttendance: studentData.lastAttendance || "",
-            profileImage: studentData.profileImage || "",
+            lastAttendance: lastAttendanceString,
+            profileImage: studentDocData.profileImage || "",
             attendancePercentage: Math.round(attendancePercentage),
-            absenceCount, // <-- add absence count
+            absenceCount: currentAbsenceCount,
             selected: false
           };
         });
@@ -413,6 +522,15 @@ const ClassroomPage = () => {
         
         console.log(`Record date: ${date}, Has proof image: ${!!data.proofImage}, Has excuse file: ${!!data.excuseFile}`);
         if (!date) return;
+
+        // Handle absent entries first
+        if (data.status === 'absent' || data.present === false) {
+          dateMap[date] = {
+            date,
+            type: 'absent',
+          };
+          return; // Skip other checks if marked absent
+        }
         
         if (data.proofImage) {
           dateMap[date] = {
@@ -507,7 +625,144 @@ const ClassroomPage = () => {
   const enrolledCount = students.filter(s => s.statusId === "1").length;
   const droppedCount = students.filter(s => s.statusId === "2").length;
   const selectedCount = students.filter(s => s.selected).length;
-    return (
+  
+  const handleMarkAbsent = async (event?: React.MouseEvent<HTMLButtonElement>) => {
+    if (event) event.preventDefault(); // Prevent default form submission
+    if (!todaySession || !markAbsentStudent) return;
+    setMarkAbsentLoading(true);
+    setMarkAbsentError("");
+    try {
+      const currentDate = new Date().toISOString().split('T')[0];
+      const studentIdForAttendance = markAbsentStudent.studentId || markAbsentStudent.id;
+      console.log("[MarkAbsent] Firestore DB instance:", db);
+      console.log("[MarkAbsent] Params:", {
+        classCode,
+        classroomId,
+        studentIdForAttendance,
+        studentName: markAbsentStudent.fullName,
+        currentDate
+      });
+      // Check if already marked absent for today
+      const attendanceQuery = query(
+        collection(db, "attendance"),
+        where("classCode", "==", classCode),
+        where("studentId", "==", studentIdForAttendance),
+        where("date", "==", currentDate)
+      );
+      const snapshot = await getDocs(attendanceQuery);
+      console.log("[MarkAbsent] Attendance query snapshot:", snapshot);
+      if (!snapshot.empty) {
+        showSnackbar("Attendance already recorded for today.", "info");
+        setMarkAbsentDialogOpen(false);
+        setMarkAbsentLoading(false);
+        return;
+      }
+      const attendanceData = {
+        classCode: classCode,
+        classroomId: classroomId,
+        studentId: studentIdForAttendance,
+        studentName: markAbsentStudent.fullName || "",
+        date: currentDate,
+        timestamp: serverTimestamp(),
+        submittedTime: serverTimestamp(),
+        present: false,
+        status: "absent",
+        isLate: false,
+        excuse: null,
+        excuseFile: null,
+        proofImage: null,
+        geolocation: null
+      };
+      console.log("[MarkAbsent] Adding attendance record:", attendanceData);
+      const result = await addDoc(collection(db, "attendance"), attendanceData);
+      console.log("[MarkAbsent] addDoc result:", result);
+      showSnackbar("Marked absent for today.", "success");
+      setRefreshing((prev: boolean) => !prev); // Only refresh data, do not reload page
+      setMarkAbsentDialogOpen(false);
+    } catch (error: any) {
+      console.error("Error marking absent:", error);
+      setMarkAbsentError(error?.message || String(error));
+      showSnackbar("Failed to mark absent: " + (error?.message || String(error)), "error");
+      // Keep dialog open to show error
+    } finally {
+      setMarkAbsentLoading(false);
+    }
+  };
+
+  // Open bulk absent dialog with all enrolled students pre-selected
+  const openBulkAbsentDialog = () => {
+    const enrolledIds = students.filter(s => s.statusId === "1").map(s => s.id);
+    setBulkAbsentSelected(enrolledIds);
+    setBulkAbsentDialogOpen(true);
+    setBulkAbsentError("");
+  };
+
+  const handleBulkAbsentSelectAll = () => {
+    if (bulkAbsentSelected.length === students.filter(s => s.statusId === "1").length) {
+      setBulkAbsentSelected([]);
+    } else {
+      setBulkAbsentSelected(students.filter(s => s.statusId === "1").map(s => s.id));
+    }
+  };
+
+  const handleBulkAbsentToggle = (studentId: string) => {
+    setBulkAbsentSelected(prev => prev.includes(studentId)
+      ? prev.filter(id => id !== studentId)
+      : [...prev, studentId]
+    );
+  };
+
+  const handleBulkMarkAbsent = async () => {
+    if (!todaySession) return;
+    setBulkAbsentLoading(true);
+    setBulkAbsentError("");
+    const currentDate = new Date().toISOString().split('T')[0];
+    const enrolledStudents = students.filter(s => s.statusId === "1" && bulkAbsentSelected.includes(s.id));
+    let errorCount = 0;
+    for (const student of enrolledStudents) {
+      try {
+        // Check if already marked absent for today
+        const attendanceQuery = query(
+          collection(db, "attendance"),
+          where("classCode", "==", classCode),
+          where("studentId", "==", student.studentId || student.id),
+          where("date", "==", currentDate)
+        );
+        const snapshot = await getDocs(attendanceQuery);
+        if (!snapshot.empty) continue;
+        const attendanceData = {
+          classCode: classCode,
+          classroomId: classroomId,
+          studentId: student.studentId || student.id,
+          studentName: student.fullName || "",
+          date: currentDate,
+          timestamp: serverTimestamp(),
+          submittedTime: serverTimestamp(),
+          present: false,
+          status: "absent",
+          isLate: false,
+          excuse: null,
+          excuseFile: null,
+          proofImage: null,
+          geolocation: null
+        };
+        await addDoc(collection(db, "attendance"), attendanceData);
+      } catch (err) {
+        errorCount++;
+        console.error("Bulk mark absent error for student", student, err);
+      }
+    }
+    setBulkAbsentLoading(false);
+    setBulkAbsentDialogOpen(false);
+    setRefreshing(prev => !prev);
+    if (errorCount === 0) {
+      showSnackbar("Marked absent for selected students.", "success");
+    } else {
+      showSnackbar(`Some students could not be marked absent (${errorCount} errors).`, "warning");
+    }
+  };
+
+  return (
     <Box sx={{ minHeight: "100vh", bgcolor: "#f8faff", pb: 8 }}>
       {(loading || takingAttendance) && 
         <LoadingOverlay isLoading={true} message={takingAttendance ? "Recording attendance..." : "Loading classroom data..."} />
@@ -757,6 +1012,61 @@ const ClassroomPage = () => {
             >
               {attendanceMode ? "Cancel Attendance" : "Take Attendance"}
             </Button>
+            {/* Bulk Mark Absent Button - styled like Take Attendance, only if todaySession exists */}
+            {!attendanceMode && todaySession && (
+              <Button
+                variant="contained"
+                size="medium"
+                color="error"
+                startIcon={<CheckCircleIcon />}
+                onClick={openBulkAbsentDialog}
+                sx={{
+                  bgcolor: '#f87171',
+                  color: 'white',
+                  textTransform: 'none',
+                  fontWeight: 600,
+                  px: 3,
+                  py: 1,
+                  fontFamily: 'var(--font-nunito)',
+                  borderRadius: 2,
+                  boxShadow: '0 2px 8px rgba(239,68,68,0.08)',
+                  '&:hover': {
+                    bgcolor: '#dc2626',
+                  },
+                  ml: 0
+                }}
+              >
+                Bulk Mark Absent
+              </Button>
+            )}
+            {/* If no session today, show disabled button with tooltip */}
+            {!attendanceMode && !todaySession && (
+              <Tooltip title="No session scheduled for today" arrow>
+                <span>
+                  <Button
+                    variant="contained"
+                    size="medium"
+                    color="error"
+                    startIcon={<CheckCircleIcon />}
+                    disabled
+                    sx={{
+                      bgcolor: '#f87171',
+                      color: 'white',
+                      textTransform: 'none',
+                      fontWeight: 600,
+                      px: 3,
+                      py: 1,
+                      fontFamily: 'var(--font-nunito)',
+                      borderRadius: 2,
+                      boxShadow: '0 2px 8px rgba(239,68,68,0.08)',
+                      ml: 0
+                    }}
+                  >
+                    Bulk Mark Absent
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </Box>
         </Card>        {/* Student Management Section */}
         <Card 
@@ -1098,171 +1408,163 @@ const ClassroomPage = () => {
                     </TableCell>
                   )}
                 </TableRow>
-              </TableHead>              <TableBody>
-                {sortedStudents.length > 0 ? (
-                  sortedStudents.map((student) => (
-                    <TableRow 
-                      key={student.id} 
-                      hover
-                      onClick={() => attendanceMode ? handleSelectStudent(student.id) : handleOpenCalendar(student)}
-                      sx={{
-                        cursor: 'pointer',
-                        '&:hover': { 
-                          bgcolor: 'rgba(51, 78, 172, 0.04)', 
-                        },
-                        '& td': { 
-                          borderColor: 'rgba(0,0,0,0.05)',
-                          py: 1.5,
-                          fontFamily: "var(--font-nunito)" 
-                        },
-                        transition: 'background-color 0.2s ease'
-                      }}
-                    >
-                      {attendanceMode && (
-                        <TableCell padding="checkbox" sx={{ pl: { xs: 2, sm: 3 } }}>
-                          <CustomCheckbox 
-                            checked={!!student.selected}
-                            onChange={() => handleSelectStudent(student.id)}
-                            disabled={student.statusId !== "1"}
-                            inputProps={{ 'aria-labelledby': student.id }}
-                            sx={{
-                              color: '#334eac',
-                              '&.Mui-checked': {
-                                color: '#334eac',
-                              },
-                              '&.Mui-disabled': {
-                                color: 'rgba(0, 0, 0, 0.26)',
-                              },
-                            }}
-                          />
-                        </TableCell>
-                      )}
-                      <TableCell>
-                        <Box sx={{ display: "flex", alignItems: "center" }}>
-                          <Badge 
-                            overlap="circular"
-                            anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
-                            badgeContent={
-                              student.attendancePercentage !== undefined ? (
-                                <Tooltip title={`${student.attendancePercentage}% attendance`}>
-                                  <Box
-                                    sx={{
-                                      width: 14,
-                                      height: 14,
-                                      borderRadius: '50%',
-                                      bgcolor: student.attendancePercentage > 75 
-                                        ? 'success.main' 
-                                        : student.attendancePercentage > 50 
-                                          ? 'warning.main' 
-                                          : 'error.main',
-                                      border: '2px solid white'
-                                    }}
-                                  />
-                                </Tooltip>
-                              ) : null
-                            }
-                          >
-                            <Avatar 
-                              src={student.profileImage || undefined} 
-                              alt={student.fullName.charAt(0)}
-                              sx={{ 
-                                width: 38, 
-                                height: 38, 
-                                mr: 1.5,
-                                bgcolor: student.profileImage ? undefined : `#${Math.floor(Math.random()*16777215).toString(16)}`
-                              }}
-                            >
-                              {student.fullName.charAt(0)}
-                            </Avatar>
-                          </Badge>
-                          <Box>
-                            <Typography variant="body1" fontWeight="500">
-                              {student.fullName}
-                              {/* Absence warning */}
-                              {(student.absenceCount ?? 0) === 2 && (
-                                <Tooltip title="Close to 3 absences!">
-                                  <Chip label="⚠️ 2 absences" color="warning" size="small" sx={{ ml: 1 }} />
-                                </Tooltip>
-                              )}
-                              {(student.absenceCount ?? 0) >= 3 && (
-                                <Tooltip title="3 or more absences!">
-                                  <Chip label="❗ 3+ absences" color="error" size="small" sx={{ ml: 1 }} />
-                                </Tooltip>
-                              )}
-                            </Typography>
-                            {isMobile && student.email && (
-                              <Typography variant="caption" color="text.secondary">
-                                {student.email}
-                              </Typography>
-                            )}
-                          </Box>
-                        </Box>
-                      </TableCell>
-                      {!isMobile && (
-                        <TableCell>
-                          {student.email || "No email provided"}
-                        </TableCell>
-                      )}
-                      <TableCell>
-                        <Chip
-                          label={student.statusId === "1" ? "Enrolled" : "Dropped"}
-                          size="small"
-                          color={student.statusId === "1" ? "success" : "error"}
-                          variant="outlined"
-                          sx={{ fontWeight: 500 }}
+              </TableHead>
+              <TableBody>
+                {sortedStudents.length > 0 ? sortedStudents.map((student) => (
+                  <TableRow
+                    key={student.id}
+                    hover
+                    onClick={() => attendanceMode ? handleSelectStudent(student.id) : handleOpenCalendar(student)}
+                    sx={{
+                      cursor: 'pointer',
+                      '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.04)' },
+                      '& td': { borderColor: 'rgba(0,0,0,0.05)', py: 1.5, fontFamily: "var(--font-nunito)" },
+                      transition: 'background-color 0.2s ease'
+                    }}
+                  >
+                    {attendanceMode && (
+                      <TableCell padding="checkbox" sx={{ pl: { xs: 2, sm: 3 } }}>
+                        <CustomCheckbox
+                          checked={!!student.selected}
+                          onChange={() => handleSelectStudent(student.id)}
+                          disabled={student.statusId !== "1"}
+                          inputProps={{ 'aria-labelledby': student.id }}
+                          sx={{
+                            color: '#334eac',
+                            '&.Mui-checked': { color: '#334eac' },
+                            '&.Mui-disabled': { color: 'rgba(0, 0, 0, 0.26)' },
+                          }}
                         />
                       </TableCell>
-                      {!isMobile && (
-                        <TableCell>
-                          {student.lastAttendance ? (
-                            <Tooltip title={`Last attended on ${student.lastAttendance}`}>
-                              <Box>
-                                {student.lastAttendance}
-                              </Box>
-                            </Tooltip>
-                          ) : (
-                            <Typography variant="body2" color="text.secondary">
-                              No record
+                    )}
+                    <TableCell>
+                      <Box sx={{ display: "flex", alignItems: "center" }}>
+                        <Badge 
+                          overlap="circular"
+                          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+                          badgeContent={
+                            student.attendancePercentage !== undefined ? (
+                              <Tooltip title={`${student.attendancePercentage}% attendance`}>
+                                <Box
+                                  sx={{
+                                    width: 14,
+                                    height: 14,
+                                    borderRadius: '50%',
+                                    bgcolor: student.attendancePercentage > 75 
+                                      ? 'success.main' 
+                                      : student.attendancePercentage > 50 
+                                        ? 'warning.main' 
+                                        : 'error.main',
+                                    border: '2px solid white'
+                                  }}
+                                />
+                              </Tooltip>
+                            ) : null
+                          }
+                        >
+                          <Avatar 
+                            src={student.profileImage || undefined} 
+                            alt={student.fullName.charAt(0)}
+                            sx={{ 
+                              width: 38, 
+                              height: 38, 
+                              mr: 1.5,
+                              bgcolor: student.profileImage ? undefined : `#${Math.floor(Math.random()*16777215).toString(16)}`
+                            }}
+                          >
+                            {student.fullName.charAt(0)}
+                          </Avatar>
+                        </Badge>
+                        <Box>
+                          <Typography variant="body1" fontWeight="500">
+                            {student.fullName}
+                            {/* Absence warning */}
+                            {(student.absenceCount ?? 0) === 2 && (
+                              <Tooltip title="Close to 3 absences!">
+                                <Chip label="⚠️ 2 absences" color="warning" size="small" sx={{ ml: 1 }} />
+                              </Tooltip>
+                            )}
+                            {(student.absenceCount ?? 0) >= 3 && (
+                              <Tooltip title="3 or more absences!">
+                                <Chip label="❗ 3+ absences" color="error" size="small" sx={{ ml: 1 }} />
+                              </Tooltip>
+                            )}
+                          </Typography>
+                          {isMobile && student.email && (
+                            <Typography variant="caption" color="text.secondary">
+                              {student.email}
                             </Typography>
                           )}
-                        </TableCell>
-                      )}
-                      {!attendanceMode && (
-                        <TableCell align="right">
-                          <Box>
-                            <Tooltip title={student.statusId === "1" ? "Mark as Dropped" : "Mark as Enrolled"}>
-                              <IconButton 
-                                size="small" 
-                                color={student.statusId === "1" ? "error" : "success"}
-                                onClick={(e) => {
+                        </Box>
+                      </Box>
+                    </TableCell>
+                    {!isMobile && (
+                      <TableCell>{student.email || "No email provided"}</TableCell>
+                    )}
+                    <TableCell>
+                      <Chip
+                        label={student.statusId === "1" ? "Enrolled" : "Dropped"}
+                        size="small"
+                        color={student.statusId === "1" ? "success" : "error"}
+                        variant="outlined"
+                        sx={{ fontWeight: 500 }}
+                      />
+                    </TableCell>
+                    {!isMobile && (
+                      <TableCell>
+                        {student.lastAttendance ? (
+                          <Tooltip title={`Last attended on ${student.lastAttendance}`}><Box>{student.lastAttendance}</Box></Tooltip>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">No record</Typography>
+                        )}
+                      </TableCell>
+                    )}
+                    {!attendanceMode && (
+                      <TableCell align="right">
+                        <Stack direction="row" spacing={1} justifyContent="flex-end">
+                          <Tooltip title="Mark as Dropped" arrow>
+                            <span>
+                              <IconButton
+                                color="warning"
+                                size="small"
+                                onClick={e => { e.stopPropagation(); openConfirmDialog(student.id, "drop"); }}
+                              >
+                                <PersonIcon />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title="Remove Student" arrow>
+                            <span>
+                              <IconButton
+                                color="error"
+                                size="small"
+                                onClick={e => { e.stopPropagation(); openConfirmDialog(student.id, "remove"); }}
+                              >
+                                <DeleteIcon />
+                              </IconButton>
+                            </span>
+                          </Tooltip>
+                          <Tooltip title={todaySession ? "Mark Absent for Today's Session" : "No session scheduled for today"} arrow>
+                            <span>
+                              <IconButton
+                                color="secondary"
+                                size="small"
+                                disabled={!todaySession}
+                                onClick={e => {
                                   e.stopPropagation();
-                                  student.statusId === "1" 
-                                    ? openConfirmDialog(student.id, "drop")
-                                    : handleUpdateStatus(student.id, "1");
+                                  setMarkAbsentStudent(student);
+                                  setMarkAbsentDialogOpen(true);
                                 }}
                               >
-                                {student.statusId === "1" ? "📝" : "✅"}
+                                <CheckCircleIcon />
                               </IconButton>
-                            </Tooltip>
-                            
-                            <Tooltip title="Remove Student">
-                              <IconButton 
-                                size="small" 
-                                sx={{ color: "#D32F2F" }}
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openConfirmDialog(student.id, "remove");
-                                }}
-                              >
-                                <DeleteIcon fontSize="small" />
-                              </IconButton>
-                            </Tooltip>
-                          </Box>
-                        </TableCell>
-                      )}
-                    </TableRow>
-                  ))
-                ) : (
+                            </span>
+                          </Tooltip>
+                        </Stack>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                )) : (
                   <TableRow>
                     <TableCell colSpan={attendanceMode ? 5 : 4} align="center" sx={{ py: 3 }}>
                       {searchTerm || statusFilter !== "all" ? "No matching students found." : "No students enrolled yet."}
@@ -1537,6 +1839,103 @@ const ClassroomPage = () => {
             )}
           </Box>
         </Modal>
+        <Dialog
+          open={markAbsentDialogOpen}
+          onClose={() => markAbsentLoading ? undefined : setMarkAbsentDialogOpen(false)}
+          PaperProps={{
+            sx: {
+              borderRadius: 3,
+              boxShadow: '0 8px 32px rgba(0,0,0,0.1)',
+              maxWidth: '400px',
+              width: '100%'
+            }
+          }}
+        >
+          <DialogTitle sx={{ fontFamily: 'var(--font-gilroy)', fontWeight: 600, color: '#1e293b', fontSize: '1.1rem' }}>
+            Confirm Mark Absent
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ color: '#64748b', fontFamily: 'var(--font-nunito)', fontSize: '1rem', mb: 1 }}>
+              Are you sure you want to mark <b>{markAbsentStudent?.fullName}</b> as absent for today's session?
+            </DialogContentText>
+            {markAbsentError && (
+              <Box sx={{ color: 'red', mt: 1, fontFamily: 'var(--font-nunito)', fontSize: '0.95rem' }}>
+                Error: {markAbsentError}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 3 }}>
+            <Button
+              onClick={() => setMarkAbsentDialogOpen(false)}
+              disabled={markAbsentLoading}
+              sx={{ textTransform: 'none', fontFamily: 'var(--font-nunito)', fontWeight: 600, color: '#64748b', borderRadius: 2, mr: 1, px: 3 }}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={e => handleMarkAbsent(e)} 
+              color="error" 
+              variant="contained" 
+              disabled={markAbsentLoading}
+              type="button" // Prevent form submission
+              startIcon={markAbsentLoading ? <CircularProgress size={18} color="inherit" /> : null}
+            >
+              {markAbsentLoading ? "Marking..." : "Confirm"}
+            </Button>
+          </DialogActions>
+        </Dialog>
+        {/* Bulk Mark Absent Dialog */}
+        <Dialog
+          open={bulkAbsentDialogOpen}
+          onClose={() => !bulkAbsentLoading && setBulkAbsentDialogOpen(false)}
+          PaperProps={{ sx: { borderRadius: 3, maxWidth: 480, width: '100%' } }}
+        >
+          <DialogTitle sx={{ fontFamily: 'var(--font-gilroy)', fontWeight: 600, color: '#1e293b', fontSize: '1.1rem' }}>
+            Bulk Mark Absent for Today's Session
+          </DialogTitle>
+          <DialogContent>
+            <DialogContentText sx={{ color: '#64748b', fontFamily: 'var(--font-nunito)', fontSize: '1rem', mb: 2 }}>
+              Select students to mark as <b>absent</b> for today's session.
+            </DialogContentText>
+            <Box sx={{ mb: 2 }}>
+              <FormControlLabel
+                control={<Checkbox checked={bulkAbsentSelected.length === students.filter(s => s.statusId === "1").length && students.filter(s => s.statusId === "1").length > 0}
+                  onChange={handleBulkAbsentSelectAll}
+                  indeterminate={bulkAbsentSelected.length > 0 && bulkAbsentSelected.length < students.filter(s => s.statusId === "1").length}
+                />}
+                label="Select All"
+              />
+            </Box>
+            <Box sx={{ maxHeight: 260, overflowY: 'auto', mb: 1 }}>
+              {students.filter(s => s.statusId === "1").map(student => (
+                <FormControlLabel
+                  key={student.id}
+                  control={<Checkbox checked={bulkAbsentSelected.includes(student.id)} onChange={() => handleBulkAbsentToggle(student.id)} />}
+                  label={student.fullName}
+                />
+              ))}
+            </Box>
+            {bulkAbsentError && (
+              <Box sx={{ color: 'red', mt: 1, fontFamily: 'var(--font-nunito)', fontSize: '0.95rem' }}>
+                Error: {bulkAbsentError}
+              </Box>
+            )}
+          </DialogContent>
+          <DialogActions sx={{ px: 3, pb: 3 }}>
+            <Button onClick={() => setBulkAbsentDialogOpen(false)} disabled={bulkAbsentLoading} sx={{ textTransform: 'none', fontFamily: 'var(--font-nunito)', fontWeight: 600, color: '#64748b', borderRadius: 2, mr: 1, px: 3 }}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleBulkMarkAbsent}
+              color="error"
+              variant="contained"
+              disabled={bulkAbsentLoading || bulkAbsentSelected.length === 0}
+              startIcon={bulkAbsentLoading ? <CircularProgress size={18} color="inherit" /> : <CheckCircleIcon />}
+            >
+              {bulkAbsentLoading ? "Marking..." : "Confirm"}
+            </Button>
+          </DialogActions>
+        </Dialog>
       </Container>
     </Box>
   );

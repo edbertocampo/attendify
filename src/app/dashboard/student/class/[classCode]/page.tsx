@@ -24,8 +24,9 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import CameraAltIcon from '@mui/icons-material/CameraAlt';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import AttendanceCalendar from '@/components/AttendanceCalendar';
+import NotificationCenter from '@/components/NotificationCenter'; // Added import
 import { getFirestore } from 'firebase/firestore';
-import { createAttendanceSubmissionNotification } from '../../../../../lib/notificationService';
+import { createAttendanceSubmissionNotification, createNotification } from '../../../../../lib/notificationService';
 
 interface Subject {
   code: string;
@@ -36,8 +37,8 @@ interface Subject {
 // Define the type for attendance entries
 interface AttendanceEntry {
   date: string;
-  type: 'image' | 'file';
-  url: string;
+  type: 'image' | 'file' | 'absent'; // MODIFIED: Added 'absent'
+  url?: string; // MODIFIED: Made url optional
   fileName?: string;
   geolocation?: { latitude: number; longitude: number } | null;
 }
@@ -85,7 +86,7 @@ const ClassroomPage = () => {
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [submitStatus, setSubmitStatus] = useState<{
-    type: 'success' | 'error' | 'info' | null;
+    type: 'success' | 'error' | 'info' | 'warning' | null;
     message: string;
   }>({ type: null, message: '' });
   const [useFrontCamera, setUseFrontCamera] = useState(true);
@@ -96,6 +97,7 @@ const ClassroomPage = () => {
   const [tabIndex, setTabIndex] = useState(0);
   const [attendanceEntries, setAttendanceEntries] = useState<AttendanceEntry[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [absenceWarningNotificationProcessed, setAbsenceWarningNotificationProcessed] = useState(false);
 
   useEffect(() => {
     const fetchClassDetails = async () => {
@@ -140,12 +142,27 @@ const ClassroomPage = () => {
     fetchClassDetails();
   }, [classCode, subjectCode, router]);
 
-  // Fetch attendance records for calendar
+  // Fetch attendance records for calendar and check for excessive absences
   useEffect(() => {
-    const fetchAttendanceRecords = async () => {
+    const fetchAttendanceRecordsAndCheckAbsences = async () => {
       if (!auth.currentUser || !classCode) return;
       setCalendarLoading(true);
+      let currentStudentName = auth.currentUser.displayName || 'Student';
+      let currentClassName = className; // Use state for className
+
       try {
+        // Ensure className is resolved before use
+        if (!currentClassName) {
+          const classRef = doc(db, 'classrooms', classCode as string);
+          const classDocSnap = await getDoc(classRef);
+          if (classDocSnap.exists()) {
+            currentClassName = classDocSnap.data().name || 'This Class';
+          } else {
+            currentClassName = 'This Class'; // Fallback
+          }
+        }
+        // ... (rest of student name fetching if needed) ...
+
         const attendanceQuery = query(
           collection(db, 'attendance'),
           where('classCode', '==', classCode),
@@ -155,16 +172,27 @@ const ClassroomPage = () => {
         const entries = snapshot.docs
           .map((docSnap) => {
             const data = docSnap.data();
+            const recordDate = data.timestamp?.toDate ? data.timestamp.toDate().toISOString().slice(0, 10) : '';
+            if (!recordDate) return undefined;
+            if (data.status === 'absent' || data.present === false) {
+              return {
+                date: recordDate,
+                type: 'absent',
+                geolocation: data.geolocation || null,
+              } as AttendanceEntry;
+            }
+            // ... other types (image, file) ...
             if (data.proofImage) {
               return {
-                date: data.timestamp.toDate ? data.timestamp.toDate().toISOString().slice(0, 10) : '',
+                date: recordDate,
                 type: 'image',
                 url: data.proofImage,
                 geolocation: data.geolocation || null,
               } as AttendanceEntry;
-            } else if (data.excuseFile) {
+            }
+            if (data.excuseFile) {
               return {
-                date: data.timestamp.toDate ? data.timestamp.toDate().toISOString().slice(0, 10) : '',
+                date: recordDate,
                 type: 'file',
                 url: data.excuseFile,
                 fileName: typeof data.excuseFile === 'string' ? data.excuseFile.split('/').pop() : undefined,
@@ -175,14 +203,56 @@ const ClassroomPage = () => {
           })
           .filter((e: AttendanceEntry | undefined): e is AttendanceEntry => !!e);
         setAttendanceEntries(entries);
+
+        const absenceCount = entries.filter(e => e.type === 'absent').length;
+        const shouldDisplayAbsenceWarning = absenceCount >= 3;
+
+        if (shouldDisplayAbsenceWarning) {
+          if (!absenceWarningNotificationProcessed) {
+            const notificationsRef = collection(db, 'notifications');
+            const q = query(
+              notificationsRef,
+              where('userId', '==', auth.currentUser.uid),
+              where('type', '==', 'warning'),
+              where('title', '==', 'Absence Warning'),
+              where('extraData.classCode', '==', classCode as string)
+            );
+
+            const existingNotificationsSnap = await getDocs(q);
+            if (existingNotificationsSnap.empty) {
+              try {
+                await createNotification({
+                  userId: auth.currentUser.uid,
+                  title: 'Absence Warning',
+                  message: `You have ${absenceCount} ${absenceCount === 1 ? 'absence' : 'absences'} in ${currentClassName || 'this class'}. Please communicate with your instructor.`,
+                  type: 'warning',
+                  extraData: {
+                    classCode: classCode as string,
+                    className: currentClassName || 'this class',
+                  }
+                });
+              } catch (notificationError) {
+                console.error('Failed to create absence warning notification:', notificationError);
+              }
+            }
+            setAbsenceWarningNotificationProcessed(true);
+          }
+        } else {
+          // Condition for warning is not met. Clear the on-page warning and reset the processed flag.
+          if (absenceWarningNotificationProcessed) { // Reset only if it was true
+             setAbsenceWarningNotificationProcessed(false);
+          }
+        }
+
       } catch (e) {
+        console.error('Error fetching attendance records for calendar:', e);
         setAttendanceEntries([]);
       } finally {
         setCalendarLoading(false);
       }
     };
-    fetchAttendanceRecords();
-  }, [auth.currentUser, classCode]);
+    fetchAttendanceRecordsAndCheckAbsences();
+  }, [auth.currentUser, classCode, className, subjectCode]); // Removed submitStatus.message, absenceWarningNotificationProcessed is not needed here
 
   const startCamera = async () => {
     try {
@@ -908,6 +978,9 @@ const ClassroomPage = () => {
         backgroundColor: '#f7fafd',
         maxWidth: '1200px',
         margin: '0 auto',
+        display: 'flex', 
+        justifyContent: 'space-between', 
+        alignItems: 'center' 
       }}>
         <Box sx={{ display: 'flex', alignItems: 'center' }}>
           <IconButton onClick={() => router.back()} sx={{ mr: 2 }} aria-label="Go back">
@@ -930,6 +1003,7 @@ const ClassroomPage = () => {
             )}
           </Box>
         </Box>
+        {auth.currentUser && <NotificationCenter userId={auth.currentUser.uid} />} {/* Modified NotificationCenter component */}
       </Box>
 
       {/* Tabs */}

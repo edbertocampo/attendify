@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   Box, 
   Paper, 
@@ -25,24 +26,28 @@ import {
   Alert,
   Fade
 } from '@mui/material';
+
+// Import Recharts components from our ChartComponents file
 import { 
   ResponsiveContainer, 
   AreaChart, 
   Area, 
   XAxis, 
   YAxis, 
-  Tooltip as RechartsTooltip, 
+  Tooltip as RechartsTooltip,
   PieChart, 
   Pie, 
-  Cell,
-  BarChart,
-  Bar,
-  Legend
-} from 'recharts';
+  Cell, 
+  BarChart, 
+  Bar, 
+  Legend,
+  Defs,
+  LinearGradient,
+  Stop
+} from '../../../components/ChartComponents';
 import { db, auth } from '../../../lib/firebase';
 import { collection, getDocs, query, where, orderBy, doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { signOut } from 'firebase/auth';
-import { useRouter } from 'next/navigation';
 import HomeIcon from '@mui/icons-material/Home';
 import PeopleIcon from '@mui/icons-material/People';
 import DescriptionIcon from '@mui/icons-material/Description';
@@ -96,7 +101,8 @@ const useDropdownScrollLock = () => {
   
   // Block all interaction when dropdown is open
   useEffect(() => {
-    if (!document) return;
+    // Check if we're in a browser environment
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
     
     if (isSelectOpen) {
       // Save the current scroll position
@@ -155,6 +161,14 @@ const useDropdownScrollLock = () => {
 };
 
 export default function ReportsPage() {
+  // Add client-side rendering indicator
+  const [isClient, setIsClient] = useState(false);
+
+  // Set isClient to true when component mounts on client side
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
   const router = useRouter();
   const [totalStudents, setTotalStudents] = useState(0);
   const [totalClasses, setTotalClasses] = useState(0);
@@ -181,9 +195,11 @@ export default function ReportsPage() {
   const [rangeMode, setRangeMode] = useState<'single' | 'week' | 'month' | 'custom'>('single');
   const [pendingRequests, setPendingRequests] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
-  
-  // Add global style for body when menu is open
+    // Add global style for body when menu is open
   useEffect(() => {
+    // Skip if not in browser environment
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+    
     // Create a style element
     const styleElement = document.createElement('style');
     styleElement.innerHTML = `
@@ -648,9 +664,7 @@ export default function ReportsPage() {
       if (unsubscribeClassrooms) unsubscribeClassrooms();
       attendanceUnsubscribes.forEach(unsub => unsub());
     };
-  }, [userId]);
-
-  return (
+  }, [userId]);  return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: '#f8fafc' }}>
       <LoadingOverlay isLoading={isLoading} message="Loading dashboard data..." />
       
@@ -992,7 +1006,7 @@ export default function ReportsPage() {
                     // Force scroll locking - critical setting
                     disableScrollLock: false,
                     // Set container to document.body to ensure proper positioning
-                    container: document.body,
+                    container: typeof document !== 'undefined' ? document.body : undefined,
                     // Menu paper styling with high z-index
                     PaperProps: {
                       style: { 
@@ -1356,47 +1370,50 @@ export default function ReportsPage() {
             fontSize: { xs: '1rem', sm: '1.25rem' }
           }}>
             Attendance Status Distribution
-          </Typography>
-          <Box sx={{ 
+          </Typography>          <Box sx={{ 
             height: { xs: 220, sm: 300 }, 
             width: '100%',
             mt: { xs: 1, sm: 0 }
           }}>
-            <ResponsiveContainer width="99%" height="100%">
-              <BarChart 
-                data={statusData}
-                margin={{ top: 5, right: 0, left: -25, bottom: 5 }}
-              >                <XAxis 
-                  dataKey="status" 
-                  tick={{ fontSize: 10 }}
-                  tickMargin={5}
-                  tickLine={false}
-                  axisLine={{ stroke: '#E5E7EB' }}
-                />
-                <YAxis 
-                  tick={{ fontSize: 10 }} 
-                  tickLine={false}
-                  axisLine={{ stroke: '#E5E7EB' }}
-                />
-                <RechartsTooltip 
-                  contentStyle={{ fontSize: '0.875rem' }} 
-                  cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}
-                />                <Legend 
-                  wrapperStyle={{ 
-                    fontSize: '0.75rem',
-                    marginTop: 5,
-                    paddingTop: 5
-                  }}
-                  verticalAlign="bottom"
-                  height={36}
-                />
-                <Bar dataKey="count" name="Students" radius={[4, 4, 0, 0]}>
-                  {statusData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            {isClient && (
+              <ResponsiveContainer width="99%" height="100%">
+                <BarChart 
+                  data={statusData}
+                  margin={{ top: 5, right: 0, left: -25, bottom: 5 }}
+                >
+                  <XAxis 
+                    dataKey="status" 
+                    tick={{ fontSize: 10 }}
+                    tickMargin={5}
+                    tickLine={false}
+                    axisLine={{ stroke: '#E5E7EB' }}
+                  />
+                  <YAxis 
+                    tick={{ fontSize: 10 }} 
+                    tickLine={false}
+                    axisLine={{ stroke: '#E5E7EB' }}
+                  />
+                  <RechartsTooltip 
+                    contentStyle={{ fontSize: '0.875rem' }} 
+                    cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}
+                  />
+                  <Legend 
+                    wrapperStyle={{ 
+                      fontSize: '0.75rem',
+                      marginTop: 5,
+                      paddingTop: 5
+                    }}
+                    verticalAlign="bottom"
+                    height={36}
+                  />
+                  <Bar dataKey="count" name="Students" radius={[4, 4, 0, 0]}>
+                    {statusData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </Box>
         </Paper>        {/* Charts Section */}
         <Box sx={{ 
@@ -1425,51 +1442,52 @@ export default function ReportsPage() {
               fontSize: { xs: '1rem', sm: '1.25rem' }
             }}>
               Attendance Trend
-            </Typography>
-            <Box sx={{ 
+            </Typography>            <Box sx={{ 
               height: { xs: 220, sm: 300 }, 
               width: '100%',
               mt: { xs: 1, sm: 0 }
-            }}>
-              <ResponsiveContainer width="99%" height="100%">
-                <AreaChart 
-                  data={attendanceData}
-                  margin={{ top: 5, right: 0, left: -25, bottom: 5 }}
-                >
-                  <defs>
-                    <linearGradient id="colorAttendance" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#0088FE" stopOpacity={0.8}/>
-                      <stop offset="95%" stopColor="#0088FE" stopOpacity={0}/>
-                    </linearGradient>
-                  </defs>                  <XAxis 
-                    dataKey="month" 
-                    tick={{ fontSize: 10 }}
-                    tickMargin={5}
-                    tickLine={false}
-                    axisLine={{ stroke: '#E5E7EB' }}
-                    padding={{ left: 10, right: 10 }}
-                  />
-                  <YAxis 
-                    domain={[0, 100]} 
-                    tick={{ fontSize: 10 }}
-                    tickLine={false}
-                    axisLine={{ stroke: '#E5E7EB' }}
-                  />
-                  <RechartsTooltip 
-                    contentStyle={{ fontSize: '0.875rem' }} 
-                    cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}
-                  />
-                  <Area 
-                    type="monotone" 
-                    dataKey="attendance" 
-                    stroke="#0088FE" 
-                    fillOpacity={1} 
-                    fill="url(#colorAttendance)" 
-                    name="Attendance %"
-                    strokeWidth={2}
-                  />
-                </AreaChart>
-              </ResponsiveContainer>
+            }}>              {isClient && (
+                <ResponsiveContainer width="99%" height="100%">
+                  <AreaChart 
+                    data={attendanceData}
+                    margin={{ top: 5, right: 0, left: -25, bottom: 5 }}
+                  >
+                    <Defs>
+                      <LinearGradient id="colorAttendance" x1="0" y1="0" x2="0" y2="1">
+                        <Stop offset="5%" stopColor="#0088FE" stopOpacity={0.8} />
+                        <Stop offset="95%" stopColor="#0088FE" stopOpacity={0} />
+                      </LinearGradient>
+                    </Defs>
+                    <XAxis 
+                      dataKey="month" 
+                      tick={{ fontSize: 10 }}
+                      tickMargin={5}
+                      tickLine={false}
+                      axisLine={{ stroke: '#E5E7EB' }}
+                      padding={{ left: 10, right: 10 }}
+                    />
+                    <YAxis 
+                      domain={[0, 100]} 
+                      tick={{ fontSize: 10 }}
+                      tickLine={false}
+                      axisLine={{ stroke: '#E5E7EB' }}
+                    />
+                    <RechartsTooltip 
+                      contentStyle={{ fontSize: '0.875rem' }} 
+                      cursor={{ fill: 'rgba(0, 0, 0, 0.05)' }}
+                    />
+                    <Area 
+                      type="monotone" 
+                      dataKey="attendance" 
+                      stroke="#0088FE" 
+                      fillOpacity={1} 
+                      fill="url(#colorAttendance)" 
+                      name="Attendance %"
+                      strokeWidth={2}
+                    />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
             </Box>
           </Paper>
 
@@ -1490,42 +1508,44 @@ export default function ReportsPage() {
               fontSize: { xs: '1rem', sm: '1.25rem' }
             }}>
               Subject Distribution
-            </Typography>
-            <Box sx={{ 
+            </Typography>            <Box sx={{ 
               height: { xs: 200, sm: 300 }, 
               width: '100%',
               mt: { xs: 1, sm: 0 }
             }}>
-              <ResponsiveContainer width="99%" height="100%">
-                <PieChart margin={{ top: 0, right: 0, bottom: 5, left: 0 }}>
-                  <Pie
-                    data={subjectData}
-                    cx="50%"
-                    cy="50%"
-                    labelLine={false}                    label={({ name, percent }) => {
-                      // Use shorter names for small spaces
-                      const displayName = name.length > 8 ? name.substring(0, 8) + '...' : name;
-                      return `${displayName} ${(percent * 100).toFixed(0)}%`;
-                    }}
-                    outerRadius={60}
-                    fill="#8884d8"
-                    dataKey="students"
-                  >
-                    {subjectData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <RechartsTooltip 
-                    contentStyle={{ 
-                      fontSize: '0.875rem',
-                      padding: '8px',
-                      borderRadius: '4px',
-                      boxShadow: '0px 3px 8px rgba(0, 0, 0, 0.12)'
-                    }} 
-                    itemStyle={{ padding: '2px 0' }}
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              {isClient && (
+                <ResponsiveContainer width="99%" height="100%">
+                  <PieChart margin={{ top: 0, right: 0, bottom: 5, left: 0 }}>
+                    <Pie
+                      data={subjectData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }: { name: string, percent: number }) => {
+                        // Use shorter names for small spaces
+                        const displayName = name.length > 8 ? name.substring(0, 8) + '...' : name;
+                        return `${displayName} ${(percent * 100).toFixed(0)}%`;
+                      }}
+                      outerRadius={60}
+                      fill="#8884d8"
+                      dataKey="students"
+                    >
+                      {subjectData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <RechartsTooltip 
+                      contentStyle={{ 
+                        fontSize: '0.875rem',
+                        padding: '8px',
+                        borderRadius: '4px',
+                        boxShadow: '0px 3px 8px rgba(0, 0, 0, 0.12)'
+                      }} 
+                      itemStyle={{ padding: '2px 0' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              )}
             </Box>
           </Paper>
         </Box>        {/* Download Dialog - optimized for mobile and tablet */}

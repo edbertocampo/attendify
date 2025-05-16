@@ -1,11 +1,11 @@
 "use client";
 
-import { Box, Button, TextField, Typography, Container, Paper, CircularProgress, IconButton, InputAdornment } from "@mui/material";
+import { Box, Button, TextField, Typography, Container, Paper, CircularProgress, IconButton, InputAdornment, Modal, Alert } from "@mui/material";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { auth, db } from "../../lib/firebase"; // Ensure Firebase is properly imported
-import { signInWithEmailAndPassword, onAuthStateChanged, setPersistence, browserLocalPersistence } from "firebase/auth";
+import { auth, db } from "../../lib/firebase";
+import { signInWithEmailAndPassword, onAuthStateChanged, setPersistence, browserLocalPersistence, sendPasswordResetEmail } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { FirebaseError } from "firebase/app";
 import { Visibility, VisibilityOff } from '@mui/icons-material';
@@ -18,8 +18,14 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [emailVerifiedError, setEmailVerifiedError] = useState<boolean>(false);
   const [showPassword, setShowPassword] = useState<boolean>(false);
+  
+  // Forgot password states
+  const [forgotPasswordOpen, setForgotPasswordOpen] = useState<boolean>(false);
+  const [resetEmail, setResetEmail] = useState<string>("");
+  const [resetEmailSent, setResetEmailSent] = useState<boolean>(false);
+  const [resetEmailError, setResetEmailError] = useState<string | null>(null);
+  const [resetLoading, setResetLoading] = useState<boolean>(false);
 
-  // Check if user is already logged in
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       if (user) {
@@ -31,7 +37,6 @@ export default function LoginPage() {
     return () => unsubscribe();
   }, [router]);
 
-  // Redirect user based on role
   const redirectToDashboard = async (uid: string) => {
     try {
       const userDocRef = doc(db, "users", uid);
@@ -61,13 +66,10 @@ export default function LoginPage() {
     setEmailVerifiedError(false);
 
     try {
-      // Set persistent login
       await setPersistence(auth, browserLocalPersistence);
 
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
-
-      console.log("Logged in user:", user);
 
       if (!user.emailVerified) {
         setEmailVerifiedError(true);
@@ -90,6 +92,32 @@ export default function LoginPage() {
     setShowPassword((prev) => !prev);
   };
 
+  const handleForgotPassword = async () => {
+    if (!resetEmail || !resetEmail.includes('@')) {
+      setResetEmailError("Please enter a valid email address");
+      return;
+    }
+    
+    setResetLoading(true);
+    setResetEmailError(null);
+    
+    try {
+      await sendPasswordResetEmail(auth, resetEmail);
+      setResetEmailSent(true);
+      setResetLoading(false);
+    } catch (error) {
+      setResetEmailError("Failed to send password reset email. Please check the email address.");
+      setResetLoading(false);
+    }
+  };
+  
+  const handleCloseForgotPassword = () => {
+    setForgotPasswordOpen(false);
+    setResetEmail("");
+    setResetEmailSent(false);
+    setResetEmailError(null);
+  };
+
   return (
     <Box
       sx={{
@@ -97,11 +125,10 @@ export default function LoginPage() {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "linear-gradient(145deg, #eaf0fb 0%, #f6f9fc 100%)", // blue-tinted background
+        background: "linear-gradient(145deg, #eaf0fb 0%, #f6f9fc 100%)",
         padding: { xs: 2, sm: 4 },
       }}
     >
-      
       <Container maxWidth="sm">
         <Paper
           elevation={0}
@@ -112,7 +139,7 @@ export default function LoginPage() {
             color: "text.primary",
             borderRadius: "24px",
             textAlign: "center",
-            border: "1px solid #dbeafe", // blue-tinted border
+            border: "1px solid #dbeafe",
             transition: "all 0.3s ease",
           }}
         >
@@ -130,7 +157,8 @@ export default function LoginPage() {
               marginBottom: "24px",
               animation: "fadeIn 0.6s ease-out",
             }}
-          />          <Typography 
+          />
+          <Typography 
             variant="h4" 
             component="h1" 
             sx={{
@@ -138,13 +166,14 @@ export default function LoginPage() {
               fontWeight: 700,
               fontSize: { xs: "24px", sm: "28px" },
               mb: 1,
-              background: "linear-gradient(90deg, #334eac 0%, #22357a 100%)", // theme gradient
+              background: "linear-gradient(90deg, #334eac 0%, #22357a 100%)",
               WebkitBackgroundClip: "text",
               WebkitTextFillColor: "transparent",
             }}
           >
             Welcome Back
-          </Typography>          <Typography 
+          </Typography>
+          <Typography 
             variant="body1" 
             sx={{ 
               fontFamily: 'var(--font-nunito)',
@@ -156,7 +185,8 @@ export default function LoginPage() {
             Sign in to continue to your account
           </Typography>
 
-          {error && (            <Typography 
+          {error && (
+            <Typography 
               color="error" 
               sx={{ 
                 fontFamily: 'var(--font-nunito)',
@@ -171,7 +201,8 @@ export default function LoginPage() {
             </Typography>
           )}
 
-          {emailVerifiedError && (            <Typography 
+          {emailVerifiedError && (
+            <Typography 
               color="error" 
               sx={{ 
                 fontFamily: 'var(--font-nunito)',
@@ -207,7 +238,7 @@ export default function LoginPage() {
               sx={{
                 '& .MuiOutlinedInput-root': {
                   borderRadius: '12px',
-                  bgcolor: 'rgba(51, 78, 172, 0.04)', // blue-tinted
+                  bgcolor: 'rgba(51, 78, 172, 0.04)',
                   transition: 'all 0.2s ease',
                   '&:hover': {
                     bgcolor: 'rgba(51, 78, 172, 0.07)',
@@ -215,6 +246,17 @@ export default function LoginPage() {
                   '&.Mui-focused': {
                     bgcolor: 'white',
                     boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
+                  },
+                  '& input:-webkit-autofill': {
+                    WebkitBoxShadow: '0 0 0 1000px rgba(51, 78, 172, 0.04) inset',
+                    WebkitTextFillColor: '#333',
+                    caretColor: '#333',
+                  },
+                  '& input:-webkit-autofill:hover': {
+                    WebkitBoxShadow: '0 0 0 1000px rgba(51, 78, 172, 0.07) inset',
+                  },
+                  '& input:-webkit-autofill:focus': {
+                    WebkitBoxShadow: '0 0 0 1000px white inset',
                   }
                 }
               }}
@@ -262,10 +304,42 @@ export default function LoginPage() {
                   '&.Mui-focused': {
                     bgcolor: 'white',
                     boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
+                  },
+                  '& input:-webkit-autofill': {
+                    WebkitBoxShadow: '0 0 0 1000px rgba(51, 78, 172, 0.04) inset',
+                    WebkitTextFillColor: '#333',
+                    caretColor: '#333',
+                  },
+                  '& input:-webkit-autofill:hover': {
+                    WebkitBoxShadow: '0 0 0 1000px rgba(51, 78, 172, 0.07) inset',
+                  },
+                  '& input:-webkit-autofill:focus': {
+                    WebkitBoxShadow: '0 0 0 1000px white inset',
                   }
                 }
               }}
             />
+            
+            {/* Forgot Password Link */}
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mt: -1 }}>
+              <Button
+                onClick={() => setForgotPasswordOpen(true)}
+                sx={{
+                  color: '#334eac',
+                  fontSize: '13px',
+                  textTransform: 'none',
+                  p: 0,
+                  minWidth: 'unset',
+                  fontWeight: 600,
+                  '&:hover': {
+                    background: 'transparent',
+                    color: '#22357a',
+                  },
+                }}
+              >
+                Forgot password?
+              </Button>
+            </Box>
 
             <Button
               type="submit"
@@ -324,6 +398,148 @@ export default function LoginPage() {
           </Box>
         </Paper>
       </Container>
+      
+      {/* Forgot Password Modal */}
+      <Modal
+        open={forgotPasswordOpen}
+        onClose={handleCloseForgotPassword}
+        aria-labelledby="forgot-password-modal"
+      >
+        <Box
+          sx={{
+            position: 'absolute',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: { xs: '90%', sm: 400 },
+            bgcolor: 'white',
+            borderRadius: '24px',
+            boxShadow: '0 8px 32px rgba(0, 0, 0, 0.08)',
+            p: 4,
+          }}
+        >
+          <Typography
+            variant="h5"
+            sx={{
+              fontFamily: 'var(--font-gilroy)',
+              fontWeight: 700,
+              mb: 1,
+              textAlign: 'center',
+              color: '#333333', // Added darker text color for better contrast
+            }}
+          >
+            Reset Password
+          </Typography>
+          
+          <Typography
+            variant="body2"
+            sx={{
+              fontFamily: 'var(--font-nunito)',
+              mb: 3,
+              color: '#555555', // Changed from 'text.secondary' to a darker gray
+              textAlign: 'center',
+            }}
+          >
+            Enter your email address and we'll send you a link to reset your password
+          </Typography>
+          
+          {resetEmailSent ? (
+            <Alert 
+              severity="success" 
+              sx={{ 
+                mb: 3,
+                borderRadius: '12px',
+              }}
+            >
+              Password reset email sent! Check your inbox.
+            </Alert>
+          ) : (
+            <>
+              {resetEmailError && (
+                <Alert 
+                  severity="error" 
+                  sx={{ 
+                    mb: 3,
+                    borderRadius: '12px',
+                  }}
+                >
+                  {resetEmailError}
+                </Alert>
+              )}
+              
+              <TextField
+                label="Email Address"
+                type="email"
+                fullWidth
+                value={resetEmail}
+                onChange={(e) => setResetEmail(e.target.value)}
+                sx={{
+                  mb: 3,
+                  '& .MuiOutlinedInput-root': {
+                    borderRadius: '12px',
+                    bgcolor: 'rgba(51, 78, 172, 0.04)',
+                    '&.Mui-focused': {
+                      bgcolor: 'white',
+                      boxShadow: '0 0 0 2px rgba(51, 78, 172, 0.18)',
+                    },
+                    '& input:-webkit-autofill': {
+                      WebkitBoxShadow: '0 0 0 1000px rgba(51, 78, 172, 0.04) inset',
+                      WebkitTextFillColor: '#333',
+                    },
+                  }
+                }}
+              />
+            </>
+          )}
+          
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 2 }}>
+            <Button
+              variant="outlined"
+              onClick={handleCloseForgotPassword}
+              sx={{
+                flex: 1,
+                borderRadius: '12px',
+                height: '48px',
+                textTransform: 'none',
+                fontWeight: 600,
+                borderColor: 'rgba(51, 78, 172, 0.3)',
+                color: '#334eac',
+                '&:hover': {
+                  borderColor: '#334eac',
+                  background: 'rgba(51, 78, 172, 0.04)',
+                },
+              }}
+            >
+              Cancel
+            </Button>
+            
+            <Button
+              variant="contained"
+              onClick={handleForgotPassword}
+              disabled={resetLoading || resetEmailSent}
+              sx={{
+                flex: 1,
+                borderRadius: '12px',
+                height: '48px',
+                textTransform: 'none',
+                fontWeight: 600,
+                background: "linear-gradient(90deg, #334eac 0%, #22357a 100%)",
+                "&:hover": {
+                  background: "linear-gradient(90deg, #22357a 0%, #334eac 100%)",
+                },
+              }}
+            >
+              {resetLoading ? (
+                <CircularProgress size={24} sx={{ color: 'white' }} />
+              ) : resetEmailSent ? (
+                'Sent'
+              ) : (
+                'Send Reset Link'
+              )}
+            </Button>
+          </Box>
+        </Box>
+      </Modal>
     </Box>
   );
 }

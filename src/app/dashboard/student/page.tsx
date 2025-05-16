@@ -86,6 +86,7 @@ const StudentDashboard = () => {
   const router = useRouter();
   const [classCode, setClassCode] = useState("");
   const [loading, setLoading] = useState(true);
+  const [navigating, setNavigating] = useState(false);
   const [enrolledClasses, setEnrolledClasses] = useState<ClassData[]>([]);
   const [studentId, setStudentId] = useState<string | null>(null);
   const [fullName, setFullName] = useState<string>("");
@@ -389,11 +390,15 @@ const StudentDashboard = () => {
 
   // Update handleClassClick to handle subject selection
   const handleSubjectClick = (classCode: string, subject: Subject) => {
+    // Show loading overlay when navigating to a specific subject
+    setNavigating(true);
     router.push(`/dashboard/student/class/${classCode}?subject=${subject.code}`);
   };
 
   // Add this function to handle classroom click
   const handleClassClick = (classCode: string) => {
+    // Show loading overlay when navigating
+    setNavigating(true);
     router.push(`/dashboard/student/class/${classCode}`);
   };
 
@@ -701,6 +706,7 @@ const StudentDashboard = () => {
         }}
       >
         {loading && <LoadingOverlay isLoading={loading} message="Loading your classes..." />}
+        {navigating && <LoadingOverlay isLoading={navigating} message="Opening classroom..." />}
         <Box sx={{ 
           display: 'flex', 
           justifyContent: 'space-between', 

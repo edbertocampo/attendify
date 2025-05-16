@@ -1,0 +1,49 @@
+{
+  // Exclude heavy or unnecessary folders
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.git": true,
+    "**/.next": true,
+    "**/.turbo": true
+  },
+
+  // Improve search speed by excluding folders from the search index
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.next": true,
+    "**/.turbo": true
+  },
+
+  // Reduce file watcher load
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/.next/**": true,
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true
+  },
+
+  // Turn off automatic suggestions if laggy
+  "editor.quickSuggestions": {
+    "other": true,
+    "comments": false,
+    "strings": false
+  },
+
+  // TypeScript performance
+  "typescript.tsserver.log": "off",
+  "typescript.tsserver.maxTsServerMemory": 4096,
+
+  // Format on save
+  "editor.formatOnSave": true,
+
+  // ESLint auto-fix
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  }
+}

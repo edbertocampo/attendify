@@ -7,8 +7,8 @@ import CircularProgress from '@mui/material/CircularProgress';
 
 interface AttendanceEntry {
   date: string; // Format: 'YYYY-MM-DD'
-  type: 'image' | 'file';
-  url: string;
+  type: 'image' | 'file' | 'absent'; // MODIFIED: Added 'absent'
+  url?: string; // MODIFIED: Made url optional
   fileName?: string;
   geolocation?: { latitude: number; longitude: number } | null;
 }
@@ -231,6 +231,8 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
           const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(cell).padStart(2, '0')}`;
           const entry = entryMap[dateStr];
           const isToday = today.getFullYear() === year && today.getMonth() + 1 === month && today.getDate() === cell;
+          const isMarkedAbsent = entry && entry.type === 'absent';
+
           return (
             <Card
               key={dateStr}
@@ -238,7 +240,11 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
                 borderRadius: 3,
                 boxShadow: entry ? '0 2px 8px rgba(51,78,172,0.10)' : 'none',
                 border: isToday ? '2px solid #334eac' : '1px solid #e0e0e0',
-                bgcolor: entry ? '#eaf0ff' : '#fff',
+                bgcolor: entry
+                  ? isMarkedAbsent
+                    ? '#fde8e8' // Muted red for absent
+                    : '#eaf0ff' // Default blue for present
+                  : '#fff',    // Default for no entry
                 minHeight: { xs: 48, sm: 80 },
                 display: 'flex',
                 alignItems: 'center',
@@ -250,7 +256,7 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
               elevation={entry ? 3 : 0}
               onClick={() => setSelectedDate(dateStr)}
             >
-              {entry && (
+              {entry && entry.type !== 'absent' && entry.url && (
                 <Box sx={{
                   position: 'absolute',
                   inset: 0,
@@ -263,7 +269,7 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
                 }}>
                   {entry.type === 'image' ? (
                     <img
-                      src={entry.url}
+                      src={entry.url} // url is now potentially undefined, ensure it exists
                       alt="Preview"
                       style={{
                         width: '100%',
@@ -289,7 +295,7 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
                   zIndex: 1,
                 }}
               >
-                <Typography variant="body1" fontWeight={600} color={isToday ? '#334eac' : '#222'} sx={{ fontSize: { xs: 14, sm: 18 }, textShadow: entry ? '0 1px 6px #fff, 0 1px 6px #fff' : 'none', position: 'relative', zIndex: 2 }}>
+                <Typography variant="body1" fontWeight={600} color={isMarkedAbsent ? '#ef4444' : isToday ? '#334eac' : '#222'} sx={{ fontSize: { xs: 14, sm: 18 }, textShadow: entry && entry.type !== 'absent' ? '0 1px 6px #fff, 0 1px 6px #fff' : 'none', position: 'relative', zIndex: 2 }}>
                   {cell}
                 </Typography>
                 {entry && entry.type === 'file' && (
@@ -334,81 +340,87 @@ const AttendanceCalendar: React.FC<AttendanceCalendarProps> = ({ year: initialYe
             {selectedDate}
           </Typography>
           {selectedEntry ? (
-            <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-              {selectedEntry.geolocation && (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 1 }}>
-                  <Typography variant="body1" color="text.primary">
-                    Geotag: {selectedEntry.geolocation.latitude}, {selectedEntry.geolocation.longitude}
-                  </Typography>
-                  {isLocating ? (
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
-                      <CircularProgress size={18} />
-                      <Typography variant="body2" color="text.secondary">Translating location...</Typography>
-                    </Box>
-                  ) : placeName ? (
-                    <Box sx={{
-                      mt: 1,
-                      maxWidth: 260,
-                      whiteSpace: 'pre-line',
-                      overflowWrap: 'break-word',
-                      wordBreak: 'break-word',
-                      textAlign: 'center',
-                      cursor: 'pointer',
-                    }} title={placeName}>
-                      <Typography variant="body2" color="text.secondary">
-                        Location: <b>{placeName}</b>
-                      </Typography>
-                    </Box>
-                  ) : null}
-                </Box>
-              )}
-              {selectedEntry.type === 'image' ? (
-                <img
-                  src={selectedEntry.url}
-                  alt="Attendance Preview"
-                  style={{
-                    maxWidth: '70vw',
-                    maxHeight: '60vh',
-                    borderRadius: 12,
-                    boxShadow: '0 2px 12px rgba(51,78,172,0.10)',
-                  }}
-                />
-              ) : (
-                <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
-                  <InsertDriveFileIcon color="primary" sx={{ fontSize: 60 }} />
-                  <Typography variant="body2" sx={{ mb: 1 }}>
-                    {selectedEntry.fileName || 'File'}
-                  </Typography>
-                  {/* Only render the link if we have a valid URL */}
-                  {selectedEntry.url && (
-                    <a
-                      href={
-                        // Ensure URL is absolute by adding origin if needed
-                        typeof selectedEntry.url === 'string' && selectedEntry.url.startsWith('/') && typeof window !== 'undefined'
-                          ? `${window.location.origin}${selectedEntry.url}`
-                          : selectedEntry.url
-                      }
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{ color: '#334eac', fontWeight: 600 }}
-                      onClick={(e) => {
-                        // Log the URL being opened for debugging
-                        console.log('Opening file URL:', selectedEntry.url);
-                        
-                        // For Firebase Storage URLs, prevent default and fetch via API if needed
-                        if (typeof selectedEntry.url === 'string' && 
-                            !selectedEntry.url.startsWith('http') && 
-                            !selectedEntry.url.startsWith('/')) {
-                          console.log('This appears to be a Firebase Storage URL, might need special handling');
+            selectedEntry.type === 'absent' ? (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                <Typography variant="h6" color="error" sx={{ fontWeight: 700 }}>
+                  Marked Absent
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  No submission for this date as the student was marked absent.
+                </Typography>
+              </Box>
+            ) : (
+              <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                {selectedEntry.geolocation && (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', mb: 1 }}>
+                    <Typography variant="body1" color="text.primary">
+                      Geotag: {selectedEntry.geolocation.latitude}, {selectedEntry.geolocation.longitude}
+                    </Typography>
+                    {isLocating ? (
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1 }}>
+                        <CircularProgress size={18} />
+                        <Typography variant="body2" color="text.secondary">Translating location...</Typography>
+                      </Box>
+                    ) : placeName ? (
+                      <Box sx={{
+                        mt: 1,
+                        maxWidth: 260,
+                        whiteSpace: 'pre-line',
+                        overflowWrap: 'break-word',
+                        wordBreak: 'break-word',
+                        textAlign: 'center',
+                        cursor: 'pointer',
+                      }} title={placeName}>
+                        <Typography variant="body2" color="text.secondary">
+                          Location: <b>{placeName}</b>
+                        </Typography>
+                      </Box>
+                    ) : null}
+                  </Box>
+                )}
+                {selectedEntry.type === 'image' && selectedEntry.url ? (
+                  <img
+                    src={selectedEntry.url} // url is now potentially undefined, ensure it exists
+                    alt="Attendance Preview"
+                    style={{
+                      maxWidth: '70vw',
+                      maxHeight: '60vh',
+                      borderRadius: 12,
+                      boxShadow: '0 2px 12px rgba(51,78,172,0.10)',
+                    }}
+                  />
+                ) : selectedEntry.type === 'file' ? (
+                  <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                    <InsertDriveFileIcon color="primary" sx={{ fontSize: 60 }} />
+                    <Typography variant="body2" sx={{ mb: 1 }}>
+                      {selectedEntry.fileName || 'File'}
+                    </Typography>
+                    {selectedEntry.url && ( // url is now potentially undefined, ensure it exists
+                      <a
+                        href={
+                          typeof selectedEntry.url === 'string' && selectedEntry.url.startsWith('/') && typeof window !== 'undefined'
+                            ? `${window.location.origin}${selectedEntry.url}`
+                            : selectedEntry.url
                         }
-                      }}
-                    >
-                      Open File
-                    </a>
-                  )}
-                </Box>
-              )}
-            </Box>
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: '#334eac', fontWeight: 600 }}
+                        onClick={(e: React.MouseEvent<HTMLAnchorElement, MouseEvent>) => {
+                          console.log('Opening file URL:', selectedEntry.url);
+                          if (typeof selectedEntry.url === 'string' && 
+                              !selectedEntry.url.startsWith('http') && 
+                              !selectedEntry.url.startsWith('/')) {
+                            console.log('This appears to be a Firebase Storage URL, might need special handling');
+                          }
+                        }}
+                      >
+                        Open File
+                      </a>
+                    )}
+                  </Box>
+                ) : null} 
+              </Box>
+            )
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
               <Typography variant="body1" color="text.secondary">
