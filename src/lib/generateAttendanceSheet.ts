@@ -3,15 +3,31 @@ import * as XLSX from 'xlsx';
 /**
  * Generates and triggers download of an attendance sheet in the requested format with borders.
  * Supports single date or multi-date (week/month/range) formats.
+ * Lists all students alphabetically, regardless of whether they have attendance records.
  * @param attendanceData Array of { studentName, status, date }
- * @param options { className, instructor, time, dates: string[] }
+ * @param options { className, instructor, time, dates: string[], allStudents?: string[] }
  */
 export function generateAttendanceSheet(
   attendanceData: Array<{ studentName: string; status: string; date: string }>,
-  options: { className: string; instructor: string; time: string; dates: string[] }
+  options: { 
+    className: string; 
+    instructor: string; 
+    time: string; 
+    dates: string[];
+    allStudents?: string[] // Optional list of all students to include regardless of attendance
+  }
 ) {
-  // Get unique students and dates
-  const students = Array.from(new Set(attendanceData.map(r => r.studentName)));
+  // Get all students to include in the sheet
+  let students: string[];
+  
+  // If all students list was provided, use it; otherwise extract from attendance data
+  if (options.allStudents && options.allStudents.length > 0) {
+    students = options.allStudents.sort((a, b) => a.localeCompare(b)); // Ensure alphabetical order
+  } else {
+    // Legacy behavior: extract unique students from attendance data
+    students = Array.from(new Set(attendanceData.map(r => r.studentName))).sort();
+  }
+  
   const dates = options.dates;
 
   // Prepare sheet data with new format
@@ -21,14 +37,15 @@ export function generateAttendanceSheet(
   sheetData.push([`Time: `, options.time]);
   sheetData.push([]);
   sheetData.push([]);
+  
   // Header row
   sheetData.push(['Student Name', ...dates]);
-  // Fill rows
+    // Fill rows for all students
   students.forEach(student => {
     const row = [student];
     dates.forEach(date => {
       const record = attendanceData.find(r => r.studentName === student && r.date === date);
-      row.push(record ? record.status : '');
+      row.push((record && record.status) ? record.status : ''); // Empty cell if no record for that date or status is undefined
     });
     sheetData.push(row);
   });
@@ -60,7 +77,11 @@ export function generateAttendanceSheet(
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Attendance');
-
-  // Download
-  XLSX.writeFile(wb, `${options.className}-attendance-${options.time.replace(/\s+/g, '_')}.xlsx`);
+  // Download - Use try-catch to handle potential errors
+  try {
+    XLSX.writeFile(wb, `${options.className}-attendance-${options.time.replace(/\s+/g, '_')}.xlsx`);
+  } catch (error) {
+    console.error("Error generating attendance sheet:", error);
+    throw new Error("Failed to generate attendance sheet. Please try again.");
+  }
 }

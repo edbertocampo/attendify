@@ -6,7 +6,6 @@ import { Box, Paper, Typography, Button, AppBar, Toolbar, IconButton, Grid, Cont
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../lib/firebase";
-import { getAvatarStyles, getInitials } from "../../lib/avatarUtils";
 import { signOut, onAuthStateChanged } from "firebase/auth";
 import { collection, query, where, getDocs, doc, updateDoc, getDoc, orderBy, Timestamp, onSnapshot } from "firebase/firestore";
 import { createExcuseStatusNotification } from "../../lib/notificationService";
@@ -45,16 +44,10 @@ export default function StudentRequests() {
   // Loading states for approve/deny actions
   const [isApproving, setIsApproving] = useState(false);
   const [isRejecting, setIsRejecting] = useState(false);
-  const [activePage, setActivePage] = useState('student-requests');
 
   useEffect(() => {
     setIsClient(true);
   }, []);
-
-  useEffect(() => {
-    if (!isClient) return;
-    setActivePage('student-requests');
-  }, [isClient]);
 
   useEffect(() => {
     if (!isClient) return;
@@ -188,21 +181,10 @@ export default function StudentRequests() {
       if (studentIds.length > 0) {
         await fetchStudentDetails(studentIds, allDocs);
       }
-        const excuses = Object.values(allDocs);
+      
+      const excuses = Object.values(allDocs);
       console.log("Found excuses:", excuses.length);
       console.log("Excuse data:", excuses);
-      
-      // Debug student profile images after everything is loaded
-      if (Object.keys(studentMap).length > 0) {
-        console.log("Student profile images:", 
-          Object.entries(studentMap).map(([id, data]) => ({
-            id,
-            name: data.fullName || data.studentName,
-            profileImage: data.profileImage
-          }))
-        );
-      }
-      
       setExcuseRequests(excuses);
       
     } catch (error) {
@@ -281,79 +263,39 @@ export default function StudentRequests() {
     } catch (error) {
       console.error("Error fetching student profiles:", error);
     }
-  };  const fetchUserEmails = async (studentMapData: {[key: string]: any}) => {
+  };
+
+  const fetchUserEmails = async (studentMapData: {[key: string]: any}) => {
     try {
       const userQuery = query(collection(db, "users"));
       const userSnapshot = await getDocs(userQuery);
       
       userSnapshot.forEach(doc => {
         const userData = doc.data();
-        if (studentMapData[doc.id]) {
-          // Update email if available
-          if (userData.email) {
-            studentMapData[doc.id].email = userData.email;
-          }
-          
-          // Update profile image if available in the users collection
-          if (userData.profileImage) {
-            // Store the profile image path, which could be a full URL or an API path
-            studentMapData[doc.id].profileImage = userData.profileImage;
-            console.log("Found user profile image:", userData.profileImage, "for user:", doc.id);
-          }
+        if (userData.email && studentMapData[doc.id]) {
+          studentMapData[doc.id].email = userData.email;
         }
       });
       
-      // Debug student profile images after everything is loaded
-      console.log("Updated student map with user data:", 
-        Object.entries(studentMapData).map(([id, data]) => ({
-          id,
-          name: data.fullName || data.studentName || 'Unknown',
-          profileImage: data.profileImage
-        }))
-      );
+      console.log("Updated student map with emails:", studentMapData);
     } catch (error) {
-      console.error("Error fetching user data:", error);
+      console.error("Error fetching user emails:", error);
     }
-  };  const handleViewDetails = async (request: any) => {
+  };
+
+  const handleViewDetails = async (request: any) => {
     try {
       if (request.studentId) {
         const userDocRef = doc(db, "users", request.studentId);
         const userDoc = await getDoc(userDocRef);
         
-        if (userDoc.exists()) {
-          const userData = userDoc.data();
-          // Get email if available
-          if (userData.email) {
-            request.studentEmail = userData.email;
-            console.log("Found user email:", request.studentEmail);
-          }
-          
-          // Get profile image if available
-          if (userData.profileImage) {
-            // Store the profile image from users collection
-            request.profileImage = userData.profileImage;
-            console.log("Found user profile image:", request.profileImage);
-            
-            // Also update the student map for consistent display
-            if (studentMap[request.studentId]) {
-              const updatedStudentMap = {...studentMap};
-              updatedStudentMap[request.studentId] = {
-                ...updatedStudentMap[request.studentId],
-                profileImage: userData.profileImage
-              };
-              setStudentMap(updatedStudentMap);
-            }
-          }
+        if (userDoc.exists() && userDoc.data().email) {
+          request.studentEmail = userDoc.data().email;
+          console.log("Found user email:", request.studentEmail);
         }
       }
-      
-      // Debug the request data with profile image
-      console.log("Request with profile data:", {
-        studentName: request.studentName,
-        profileImage: request.profileImage || studentMap[request.studentId]?.profileImage || "none"
-      });
     } catch (error) {
-      console.error("Error fetching user data:", error);
+      console.error("Error fetching user email:", error);
     }
     
     setSelectedRequest(request);
@@ -531,7 +473,9 @@ export default function StudentRequests() {
                 display: { xs: 'block', md: 'none' }
               }}
             />
-          </Box>          {/* Navigation Items */}
+          </Box>
+
+          {/* Navigation Items */}
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1 }}>
             <Button
               startIcon={<HomeIcon />}
@@ -565,7 +509,6 @@ export default function StudentRequests() {
               </Typography>
             </Button>
 
-            {/* This button is highlighted as active */}
             <Button
               startIcon={
                 <Badge color="error" badgeContent={pendingRequests} invisible={pendingRequests === 0} sx={{ '& .MuiBadge-badge': { fontWeight: 600, fontSize: 13, minWidth: 20, height: 20 } }}>
@@ -591,12 +534,12 @@ export default function StudentRequests() {
                   minWidth: { xs: 22, md: 'auto' }
                 }
               }}
-            >              <Typography
+            >
+              <Typography
                 sx={{
                   display: { xs: 'none', md: 'block' },
                   fontWeight: 500,
-                  fontFamily: 'var(--font-gilroy)',
-                  whiteSpace: 'nowrap'
+                  fontFamily: 'var(--font-gilroy)'
                 }}
               >
                 Student Requests
@@ -789,16 +732,19 @@ export default function StudentRequests() {
                     }
                   }}
                 >
-                  <CardContent sx={{ p: { xs: 2, sm: 3 } }}>                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>                      <Box sx={{ display: 'flex', alignItems: 'center' }}>                        <Avatar 
-                          src={request.profileImage || studentMap[request.studentId]?.profileImage || undefined}
-                          sx={{
-                            ...getAvatarStyles(request.studentName || '', !!(request.profileImage || studentMap[request.studentId]?.profileImage), 'large'),
+                  <CardContent sx={{ p: { xs: 2, sm: 3 } }}>
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                        <Avatar 
+                          sx={{ 
+                            bgcolor: '#e2e8f0',
+                            color: '#64748b',
                             width: { xs: 40, sm: 48 },
                             height: { xs: 40, sm: 48 },
                             mr: 2
                           }}
                         >
-                          {getInitials(request.studentName || 'S')}
+                          {request.studentName?.charAt(0) || 'S'}
                         </Avatar>
                         <Box>
                           <Typography 
@@ -976,15 +922,16 @@ export default function StudentRequests() {
                   }}
                 >
                   STUDENT
-                </Typography>                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
                   <Avatar 
-                    src={selectedRequest.profileImage || studentMap[selectedRequest.studentId]?.profileImage || undefined}
-                    sx={{
-                      ...getAvatarStyles(selectedRequest.studentName || '', !!(selectedRequest.profileImage || studentMap[selectedRequest.studentId]?.profileImage), 'medium'),
+                    sx={{ 
+                      bgcolor: '#e2e8f0',
+                      color: '#64748b',
                       mr: 1.5
                     }}
                   >
-                    {getInitials(selectedRequest.studentName || 'S')}
+                    {selectedRequest.studentName?.charAt(0) || 'S'}
                   </Avatar>
                   <Box>
                     <Typography 

@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { db, auth } from "../../../lib/firebase";
+import { getAvatarStyles, getInitials } from "../../../lib/avatarUtils";
 import {
   collection,
   getDocs,
@@ -29,6 +30,7 @@ import {
   Paper,
   CircularProgress,
   IconButton,
+  Avatar,
 } from "@mui/material";
 import ExitToAppIcon from "@mui/icons-material/ExitToApp";
 import SchoolIcon from "@mui/icons-material/School";
@@ -90,6 +92,7 @@ const StudentDashboard = () => {
   const [enrolledClasses, setEnrolledClasses] = useState<ClassData[]>([]);
   const [studentId, setStudentId] = useState<string | null>(null);
   const [fullName, setFullName] = useState<string>("");
+  const [profileImage, setProfileImage] = useState<string | null>(null);
   const [joinDialogOpen, setJoinDialogOpen] = useState(false);
   const [dragging, setDragging] = useState(false);
 
@@ -135,7 +138,9 @@ const StudentDashboard = () => {
           const studentRef = doc(db, "users", user.uid);
           const studentDoc = await getDoc(studentRef);
           if (studentDoc.exists()) {
-            setFullName(studentDoc.data().fullName);
+            const userData = studentDoc.data();
+            setFullName(userData.fullName || "Unknown Student");
+            setProfileImage(userData.profileImage || null);
           } else {
             setFullName("Unknown Student");
           }
@@ -640,8 +645,13 @@ const StudentDashboard = () => {
               My Classes
             </Typography>
           </Button>
+        </Box>
+        
+        {/* Bottom Navigation */}
+        <Box sx={{ mt: 'auto', display: 'flex', flexDirection: 'column', gap: 1, px: 1 }}>
           <Button
             startIcon={<SettingsIcon />}
+            onClick={() => router.push('/settings')}
             sx={{
               justifyContent: 'flex-start',
               color: '#64748b',
@@ -652,14 +662,13 @@ const StudentDashboard = () => {
               width: '100%',
               fontWeight: 500,
               fontSize: { xs: '1rem', md: '1.05rem' },
-              '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.06)' },
+              '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
               '& .MuiButton-startIcon': {
                 margin: 0,
                 mr: { xs: 0, md: 1.5 },
                 minWidth: { xs: 22, md: 'auto' }
               }
             }}
-            disabled
           >
             <Typography
               sx={{
@@ -672,7 +681,8 @@ const StudentDashboard = () => {
             </Typography>
           </Button>
         </Box>
-        <Box sx={{ mt: "auto", width: "100%" }}>
+        
+        <Box sx={{ width: "100%" }}>
           <Button
             startIcon={<LogoutIcon />}
             onClick={handleLogout}

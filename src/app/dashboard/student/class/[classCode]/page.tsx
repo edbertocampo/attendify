@@ -97,6 +97,7 @@ const ClassroomPage = () => {
   const [tabIndex, setTabIndex] = useState(0);
   const [attendanceEntries, setAttendanceEntries] = useState<AttendanceEntry[]>([]);
   const [calendarLoading, setCalendarLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [absenceWarningNotificationProcessed, setAbsenceWarningNotificationProcessed] = useState(false);
 
   useEffect(() => {
@@ -384,6 +385,11 @@ const ClassroomPage = () => {
   };
 
   const handleSubmitAttendance = async () => {
+    // Prevent multiple submissions
+    if (isSubmitting) {
+      return;
+    }
+
     if (!attendanceImage && !excuse) {
       setSubmitStatus({
         type: 'error',
@@ -399,6 +405,9 @@ const ClassroomPage = () => {
       });
       return;
     }
+    
+    // Set submitting state to true to show loading and disable button
+    setIsSubmitting(true);
 
     // --- GEOLOCATION CAPTURE ---
     let geo = null;
@@ -924,6 +933,9 @@ const ClassroomPage = () => {
         message: error instanceof Error ? error.message : 'Failed to submit attendance'
       });
       setSnackbarOpen(true);
+    } finally {
+      // Reset the submitting state regardless of success or failure
+      setIsSubmitting(false);
     }
   };
 
@@ -1206,7 +1218,8 @@ const ClassroomPage = () => {
                 color="primary"
                 fullWidth
                 onClick={handleSubmitAttendance}
-                disabled={loading || (!attendanceImage && !excuse)}
+                disabled={loading || isSubmitting || (!attendanceImage && !excuse)}
+                startIcon={isSubmitting ? <CircularProgress size={24} color="inherit" /> : null}
                 sx={{
                   mt: 4,
                   fontWeight: 'bold',
@@ -1218,7 +1231,7 @@ const ClassroomPage = () => {
                 }}
                 aria-label="Submit attendance"
               >
-                Submit Attendance
+                {isSubmitting ? "Submitting..." : "Submit Attendance"}
               </Button>
             </Box>
           </>

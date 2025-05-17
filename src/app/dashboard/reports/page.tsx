@@ -75,11 +75,6 @@ interface MonthlyAttendance {
   attendance: number;
 }
 
-interface SubjectDistribution {
-  name: string;
-  students: number;
-}
-
 interface FilteredAttendanceRecord {
   timestamp: Date;
   subject: string;
@@ -174,7 +169,6 @@ export default function ReportsPage() {
   const [totalClasses, setTotalClasses] = useState(0);
   const [averageAttendance, setAverageAttendance] = useState(0);
   const [attendanceData, setAttendanceData] = useState<MonthlyAttendance[]>([]);
-  const [subjectData, setSubjectData] = useState<SubjectDistribution[]>([]);
   const [attendanceChange, setAttendanceChange] = useState(0);
   const [studentsChange, setStudentsChange] = useState(0);
   const [classesChange, setClassesChange] = useState(0);
@@ -195,7 +189,9 @@ export default function ReportsPage() {
   const [rangeMode, setRangeMode] = useState<'single' | 'week' | 'month' | 'custom'>('single');
   const [pendingRequests, setPendingRequests] = useState(0);
   const [userId, setUserId] = useState<string | null>(null);
-    // Add global style for body when menu is open
+  const [activePage, setActivePage] = useState('reports');
+
+  // Add global style for body when menu is open
   useEffect(() => {
     // Skip if not in browser environment
     if (typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -254,14 +250,22 @@ export default function ReportsPage() {
 
   const handleClassroomChange = (event: any) => {
     setSelectedClassroom(event.target.value);
-  };
-  // Open the download dialog for a specific classroom
+  };  // Open the download dialog for a specific classroom
   const openDownloadDialog = () => {
     if (selectedClassroom === 'all') {
       setSnackbarMessage('Please select a specific classroom to download attendance records.');
       setSnackbarOpen(true);
       return;
     }
+    
+    // Verify the selected classroom belongs to the current instructor
+    const classroom = classrooms.find(c => c.id === selectedClassroom);
+    if (!classroom || (classroom.createdBy !== userId)) {
+      setSnackbarMessage('You do not have permission to download records for this classroom.');
+      setSnackbarOpen(true);
+      return;
+    }
+    
     setClassroomToDownload(selectedClassroom);
     // Set range mode based on timeFilter
     if (timeFilter === 'weekly') setRangeMode('week');
@@ -307,49 +311,53 @@ export default function ReportsPage() {
     ];
     
     return csvRows.join('\n');
-  };
-
-  // Download attendance records
+  };  // Download attendance records
   const downloadAttendanceRecords = async () => {
     if (!classroomToDownload) return;
     setDownloadingData(true);
     try {
       let startTime: Date, endTime: Date;
       if (rangeMode === 'single') {
+        // Validate the date format
+        if (!selectedDate || isNaN(new Date(selectedDate).getTime())) {
+          alert("Please select a valid date.");
+          setDownloadingData(false);
+          return;
+        }
+        
         const selectedDateObj = new Date(selectedDate);
         startTime = new Date(selectedDateObj.getFullYear(), selectedDateObj.getMonth(), selectedDateObj.getDate());
         endTime = new Date(selectedDateObj.getFullYear(), selectedDateObj.getMonth(), selectedDateObj.getDate(), 23, 59, 59);
       } else {
         // Use dateRange for week, month, custom
+        // Validate the date range
+        if (!dateRange.start || !dateRange.end || 
+            isNaN(new Date(dateRange.start).getTime()) || 
+            isNaN(new Date(dateRange.end).getTime())) {
+          alert("Please select a valid date range.");
+          setDownloadingData(false);
+          return;
+        }
+        
         const start = new Date(dateRange.start);
         const end = new Date(dateRange.end);
+        
+        // Ensure start date is before end date
+        if (start > end) {
+          alert("Start date must be before end date.");
+          setDownloadingData(false);
+          return;
+        }
+        
         startTime = new Date(start.getFullYear(), start.getMonth(), start.getDate());
         endTime = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 23, 59, 59);
       }
-      // Query attendance records for the selected range and classroom
-      const attendanceQuery = query(
-        collection(db, 'attendance'),
-        where('classCode', '==', classroomToDownload),
-        where('timestamp', '>=', startTime),
-        where('timestamp', '<=', endTime),
-        orderBy('timestamp', 'asc')
-      );
-      const attendanceSnapshot = await getDocs(attendanceQuery);
-      // Format the attendance records
-      const attendanceRecords = attendanceSnapshot.docs.map(doc => ({
-        ...doc.data(),
-        timestamp: doc.data().timestamp?.toDate(),
-        id: doc.id
-      })) as Array<{ studentName: string; status: string; timestamp: Date; id: string }>;
-      if (attendanceRecords.length === 0) {
-        alert("No attendance records found for the selected range.");
-        setDownloadingData(false);
-        return;
-      }
+      
       // Get classroom and instructor info
       const classroom = classrooms.find(c => c.id === classroomToDownload);
       const className = classroom?.name || 'Classroom';
       let instructor = 'Instructor';
+      
       // Fetch instructor name from users collection using classroom.createdBy as document ID
       if (classroom && (classroom as any).createdBy) {
         try {
@@ -363,36 +371,135 @@ export default function ReportsPage() {
           // fallback to default instructor
         }
       }
+      
       // Use range as time label
       let timeLabel = '';
       if (rangeMode === 'single') timeLabel = selectedDate;
       else timeLabel = `${dateRange.start} to ${dateRange.end}`;
-      // Build unique date list in range
+      
+      // First, get all students in the classroom, sorted alphabetically
+      const studentsQuery = query(
+        collection(db, 'students'),
+        where('classCode', '==', classroomToDownload)
+      );
+      const studentsSnapshot = await getDocs(studentsQuery);
+      
+      if (studentsSnapshot.empty) {
+        alert("No students found in this classroom.");
+        setDownloadingData(false);
+        return;
+      }
+      
+      // Get all students from the classroom and sort them alphabetically
+      const allStudents = studentsSnapshot.docs.map(doc => doc.data().fullName || doc.data().studentName || 'Unknown')
+        .filter(name => name !== 'Unknown')
+        .sort((a, b) => a.localeCompare(b));
+      
+      // Query attendance records for the selected range and classroom
+      const attendanceQuery = query(
+        collection(db, 'attendance'),
+        where('classCode', '==', classroomToDownload),
+        where('timestamp', '>=', startTime),
+        where('timestamp', '<=', endTime),
+        orderBy('timestamp', 'asc')
+      );
+      const attendanceSnapshot = await getDocs(attendanceQuery);
+        // Format the attendance records and validate each record
+      const attendanceRecords = attendanceSnapshot.docs
+        .map(doc => {
+          const data = doc.data();
+          return {
+            ...data,
+            studentName: data.studentName || 'Unknown',
+            status: data.status || '',  // Ensure status is never undefined
+            timestamp: data.timestamp?.toDate(),
+            id: doc.id
+          };
+        }) as Array<{ studentName: string; status: string; timestamp: Date; id: string }>;
+        // Build unique date list in range
       const allDatesSet = new Set<string>();
       attendanceRecords.forEach(row => {
         if (row.timestamp instanceof Date && !isNaN(row.timestamp.getTime())) {
           allDatesSet.add(row.timestamp.toISOString().slice(0, 10));
         }
       });
-      const allDates = Array.from(allDatesSet).sort();
-      // Debug: log attendanceRecords to verify studentName
-      console.log('Attendance Records for Export:', attendanceRecords);
-      // Prepare attendance data for sheet with date
-      const sheetData = attendanceRecords.map(row => ({
-        studentName: row.studentName || '',
-        status: row.status.charAt(0).toUpperCase() + row.status.slice(1),
-        date: row.timestamp instanceof Date && !isNaN(row.timestamp.getTime()) ? row.timestamp.toISOString().slice(0, 10) : ''
-      }));
+      let allDates = Array.from(allDatesSet).sort();
+      
+      // If no attendance dates found but we have a date range, use that for the sheet
+      if (allDates.length === 0) {
+        console.log("No attendance records found, using selected date range");
+        // For single date mode
+        if (rangeMode === 'single') {
+          allDates = [selectedDate];
+        } 
+        // For other modes (week, month, custom), generate dates in the range
+        else {
+          const startDate = new Date(dateRange.start);
+          const endDate = new Date(dateRange.end);
+          const dateArray = [];
+          
+          // Generate all dates in the range
+          const currentDate = new Date(startDate);
+          while (currentDate <= endDate) {
+            dateArray.push(currentDate.toISOString().slice(0, 10));
+            currentDate.setDate(currentDate.getDate() + 1);
+          }
+          
+          allDates = dateArray;
+        }
+        
+        if (allDates.length === 0) {
+          alert("Please select a valid date range.");
+          setDownloadingData(false);
+          return;
+        }
+      }
+        // Prepare attendance data for sheet with date, including ALL students
+      const sheetData: Array<{ studentName: string; status: string; date: string }> = [];
+      
+      // Create attendance data entries for each student and date combination
+      allStudents.forEach(studentName => {
+        // For each date, find if the student has an attendance record
+        allDates.forEach(date => {
+          const record = attendanceRecords.find(r => 
+            r.studentName === studentName && 
+            r.timestamp instanceof Date && 
+            !isNaN(r.timestamp.getTime()) && 
+            r.timestamp.toISOString().slice(0, 10) === date
+          );
+            // Add the entry to our sheet data, with empty status if no record exists
+          sheetData.push({
+            studentName: studentName,
+            status: record && record.status ? record.status.charAt(0).toUpperCase() + record.status.slice(1) : '',
+            date: date
+          });
+        });
+      });
+      
+      // Generate the sheet using our helper function
       generateAttendanceSheet(sheetData, {
         className,
         instructor,
         time: timeLabel,
-        dates: allDates
+        dates: allDates,
+        allStudents: allStudents // Pass all students to ensure everyone is included
       });
-      closeDownloadDialog();
-    } catch (error) {
+      
+      closeDownloadDialog();    } catch (error) {
       console.error("Error downloading attendance records:", error);
-      alert("Failed to download attendance records. Please try again.");
+      // Show a more specific error message if possible
+      let errorMessage = "Failed to download attendance records. Please try again.";
+      
+      if (error instanceof Error) {
+        if (error.message.includes("NetworkError") || error.message.includes("network")) {
+          errorMessage = "Network error. Please check your internet connection and try again.";
+        } else if (error.message.includes("permission") || error.message.includes("access")) {
+          errorMessage = "Permission error. You might not have access to some records.";
+        }
+        console.error("Error details:", error.message);
+      }
+      
+      alert(errorMessage);
     } finally {
       setDownloadingData(false);
     }
@@ -435,11 +542,10 @@ export default function ReportsPage() {
           where('isArchived', '==', false)
         );
         const classesSnapshot = await getDocs(classesQuery);
-        console.log('Classes snapshot size:', classesSnapshot.size);
-
-        // Query non-archived classrooms
+        console.log('Classes snapshot size:', classesSnapshot.size);        // Query non-archived classrooms created by this instructor
         const classroomsQuery = query(
           collection(db, 'classrooms'),
+          where('createdBy', '==', user.uid),
           where('isArchived', '==', false)
         );
         const classroomsSnapshot = await getDocs(classroomsQuery);
@@ -452,29 +558,73 @@ export default function ReportsPage() {
           subject: doc.data().subject || '',
           createdBy: doc.data().createdBy || ''
         }));
-        setClassrooms(classroomData);
-
-        // Fetch all collections for other metrics
-        const studentsSnapshot = await getDocs(collection(db, 'students'));
-        const classesSnapshotAll = await getDocs(collection(db, 'classrooms'));
+        setClassrooms(classroomData);        // Fetch all collections for other metrics
         
-        // Fetch attendance for current and previous month
+        // Only get classrooms created by this instructor
+        const classroomsAllQuery = query(
+          collection(db, 'classrooms'),
+          where('createdBy', '==', user.uid)
+        );
+        const classesSnapshotAll = await getDocs(classroomsAllQuery);
+        
+        // Get classroom IDs for filtering
+        const classroomIds = classesSnapshotAll.docs.map(doc => doc.id);
+        
+        // Only count students from this instructor's classrooms
+        let totalStudentCount = 0;
+        for (const classroomId of classroomIds) {
+          const classStudentsQuery = query(
+            collection(db, 'students'),
+            where('classCode', '==', classroomId)
+          );
+          const classStudentsSnapshot = await getDocs(classStudentsQuery);
+          totalStudentCount += classStudentsSnapshot.size;
+        }
+          // Fetch attendance for current and previous month
         const currentDate = new Date();
         const firstDayCurrentMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1);
         const firstDayLastMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1);
         
-        const attendanceQuery = query(
-          collection(db, 'attendance'),
-          where('timestamp', '>=', firstDayLastMonth),
-          orderBy('timestamp', 'desc')
-        );
-        const attendanceSnapshot = await getDocs(attendanceQuery);
-
-        // Set basic metrics
-        const currentStudents = studentsSnapshot.size;
-        setTotalStudents(currentStudents);
+        // Split classroom IDs into chunks of 10 for Firestore's "in" query limitation
+        const classroomIdChunks: string[][] = [];
+        for (let i = 0; i < classroomIds.length; i += 10) {
+            classroomIdChunks.push(classroomIds.slice(i, i + 10));
+        }
         
-        const currentClasses = classesSnapshotAll.size;
+        // Fetch attendance records for all classroom chunks
+        let allAttendanceRecords: any[] = [];
+        
+        // If there are classrooms
+        if (classroomIdChunks.length > 0) {
+            for (const chunk of classroomIdChunks) {
+                const attendanceChunkQuery = query(
+                    collection(db, 'attendance'),
+                    where('classCode', 'in', chunk),
+                    where('timestamp', '>=', firstDayLastMonth),
+                    orderBy('timestamp', 'desc')
+                );
+                const chunkSnapshot = await getDocs(attendanceChunkQuery);
+                allAttendanceRecords = [...allAttendanceRecords, ...chunkSnapshot.docs];
+            }
+        }
+        
+        // Create an attendance snapshot that mimics the getDocs result structure
+        const attendanceSnapshot = {
+            docs: allAttendanceRecords,
+            size: allAttendanceRecords.length
+        };
+        
+        // Set basic metrics
+        setTotalStudents(totalStudentCount);
+        
+        // Only count non-archived classrooms for the total classes metric
+        const nonArchivedClassroomsQuery = query(
+          collection(db, 'classrooms'),
+          where('createdBy', '==', user.uid),
+          where('isArchived', '==', false)
+        );
+        const nonArchivedClassroomsSnapshot = await getDocs(nonArchivedClassroomsQuery);
+        const currentClasses = nonArchivedClassroomsSnapshot.size;
         setTotalClasses(currentClasses);
 
         // Process attendance records
@@ -515,15 +665,39 @@ export default function ReportsPage() {
         const attendanceChangeValue = lastMonthAvg > 0 
           ? ((avgAttendance - lastMonthAvg) / lastMonthAvg) * 100
           : 0;
-        setAttendanceChange(Math.round(attendanceChangeValue * 10) / 10);
-
-        // Calculate students change (mock data for now since we don't track historical student counts)
-        setStudentsChange(5);
+        setAttendanceChange(Math.round(attendanceChangeValue * 10) / 10);        // Calculate students change based on previous month data
+        // Query students from last month for comparison
+        let lastMonthStudentCount = 0;
+        for (const classroomId of classroomIds) {
+          // We'll check students who were created before the current month started
+          const lastMonthStudentsQuery = query(
+            collection(db, 'students'),
+            where('classCode', '==', classroomId),
+            where('createdAt', '<', firstDayCurrentMonth)
+          );
+          const lastMonthStudentsSnapshot = await getDocs(lastMonthStudentsQuery);
+          lastMonthStudentCount += lastMonthStudentsSnapshot.size;
+        }
         
-        // Calculate classes change (mock data for now since we don't track historical class counts)
-        setClassesChange(12);
-
-        // Generate monthly attendance data for the graph
+        const studentsChangeValue = lastMonthStudentCount > 0 
+          ? ((totalStudentCount - lastMonthStudentCount) / lastMonthStudentCount) * 100 
+          : 0;
+        setStudentsChange(Math.round(studentsChangeValue * 10) / 10);
+        
+        // Calculate classes change by comparing with last month's classrooms
+        const lastMonthClassroomsQuery = query(
+          collection(db, 'classrooms'),
+          where('createdBy', '==', user.uid),
+          where('isArchived', '==', false),
+          where('createdAt', '<', firstDayCurrentMonth)
+        );
+        const lastMonthClassroomsSnapshot = await getDocs(lastMonthClassroomsQuery);
+        const lastMonthClassesCount = lastMonthClassroomsSnapshot.size;
+        
+        const classesChangeValue = lastMonthClassesCount > 0 
+          ? ((currentClasses - lastMonthClassesCount) / lastMonthClassesCount) * 100 
+          : 0;
+        setClassesChange(Math.round(classesChangeValue * 10) / 10);        // Generate monthly attendance data for the graph
         const last6Months = Array.from({ length: 6 }, (_, i) => {
           const date = new Date();
           date.setMonth(date.getMonth() - (5 - i));
@@ -534,9 +708,12 @@ export default function ReportsPage() {
           const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
           const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0);
           
-          const monthRecords = attendanceRecords.filter(record => 
-            record.timestamp >= monthStart && record.timestamp <= monthEnd
-          );
+          const monthRecords = attendanceRecords
+            .filter(record => 
+              record.timestamp >= monthStart && 
+              record.timestamp <= monthEnd &&
+              classroomIds.includes(record.classCode) // Only include instructor's classrooms
+            );
 
           const monthlyPresent = monthRecords.filter(record => 
             record.status === 'present' || record.status === 'late'
@@ -548,49 +725,44 @@ export default function ReportsPage() {
               ? Math.round((monthlyPresent / monthRecords.length) * 100)
               : 0
           };
-        });
-        setAttendanceData(monthlyData);
-
-        // Generate classroom distribution data
-        const classroomMap = new Map<string, Set<string>>();
-        currentMonthRecords.forEach(record => {
-          if (!classroomMap.has(record.classCode)) {
-            classroomMap.set(record.classCode, new Set());
-          }
-          classroomMap.get(record.classCode)?.add(record.studentId);
-        });
-
-        const classroomDistribution = Array.from(classroomMap.entries())
-          .map(([name, students]) => ({
-            name: classrooms.find(c => c.id === name)?.name || name,
-            students: students.size
-          }))
-          .sort((a, b) => b.students - a.students)
-          .slice(0, 4); // Show top 4 classrooms
-
-        setSubjectData(classroomDistribution);
-
+        });        setAttendanceData(monthlyData);
+        
         const { startDate, endDate } = getDateRange();
         
-        const filteredAttendanceQuery = query(
-          collection(db, 'attendance'),
-          where('timestamp', '>=', startDate),
-          where('timestamp', '<=', endDate),
-          orderBy('timestamp', 'desc')
-        );
-
-        const filteredAttendanceSnapshot = await getDocs(filteredAttendanceQuery);
+        // Fetch filtered attendance records for the instructor's classrooms
+        let filteredAllAttendanceRecords: any[] = [];
+        
+        // If there are classrooms
+        if (classroomIdChunks.length > 0) {
+            for (const chunk of classroomIdChunks) {
+                const filteredAttendanceChunkQuery = query(
+                    collection(db, 'attendance'),
+                    where('classCode', 'in', chunk),
+                    where('timestamp', '>=', startDate),
+                    where('timestamp', '<=', endDate),
+                    orderBy('timestamp', 'desc')
+                );
+                const filteredChunkSnapshot = await getDocs(filteredAttendanceChunkQuery);
+                filteredAllAttendanceRecords = [...filteredAllAttendanceRecords, ...filteredChunkSnapshot.docs];
+            }
+        }
+        
+        // Create a snapshot structure that mimics the getDocs result
+        const filteredAttendanceSnapshot = {
+            docs: filteredAllAttendanceRecords,
+            size: filteredAllAttendanceRecords.length
+        };
         const filteredAttendanceRecords = filteredAttendanceSnapshot.docs.map(doc => ({
           ...doc.data(),
           timestamp: doc.data().timestamp?.toDate(),
           status: doc.data().status || 'absent',
           isLate: doc.data().isLate || false,
           classCode: doc.data().classCode || ''
-        })) as FilteredAttendanceRecord[];
-
-        // Filter by classroom if needed
+        })) as FilteredAttendanceRecord[];        // Filter by classroom if needed
+        // Note: filteredAttendanceRecords are already filtered to only include records from this instructor's classrooms
+        // because we used the instructor's classroom IDs when querying the data
         const filteredRecords = selectedClassroom === 'all'
-          ? filteredAttendanceRecords
+          ? filteredAttendanceRecords // This already only includes the instructor's classrooms
           : filteredAttendanceRecords.filter(record => record.classCode === selectedClassroom);
 
         // Calculate status distribution
@@ -664,7 +836,25 @@ export default function ReportsPage() {
       if (unsubscribeClassrooms) unsubscribeClassrooms();
       attendanceUnsubscribes.forEach(unsub => unsub());
     };
-  }, [userId]);  return (
+  }, [userId]);
+
+  useEffect(() => {
+    if (!isClient) return;
+    
+    // Set the active page based on the current pathname
+    const path = window.location.pathname;
+    if (path.includes('/dashboard/instructor')) {
+      setActivePage('instructor');
+    } else if (path.includes('/student-requests')) {
+      setActivePage('student-requests');
+    } else if (path.includes('/dashboard/reports')) {
+      setActivePage('reports');
+    } else if (path.includes('/settings')) {
+      setActivePage('settings');
+    }
+  }, [isClient]);
+
+  return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: '#f8fafc' }}>
       <LoadingOverlay isLoading={isLoading} message="Loading dashboard data..." />
       
@@ -703,52 +893,15 @@ export default function ReportsPage() {
               display: { xs: 'block', md: 'none' }
             }}
           />
-        </Box>
-
-        {/* Navigation Items */}
+        </Box>        {/* Navigation Items */}
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1 }}>
           <Button
             startIcon={<HomeIcon />}
             onClick={() => router.push('/dashboard/instructor')}
             sx={{
               justifyContent: 'flex-start',
-              color: '#334eac',
-              bgcolor: 'rgba(51, 78, 172, 0.07)',
-              borderRadius: '8px',
-              py: { xs: 1, md: 1.2 },
-              px: { xs: 1.2, md: 1.7 },
-              minWidth: 0,
-              width: '100%',
-              fontWeight: 500,
-              fontSize: { xs: '1rem', md: '1.05rem' },
-              '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.13)' },
-              '& .MuiButton-startIcon': {
-                margin: 0,
-                mr: { xs: 0, md: 1.5 },
-                minWidth: { xs: 22, md: 'auto' }
-              }
-            }}
-          >            <Typography
-              sx={{
-                display: { xs: 'none', md: 'block' },
-                fontWeight: 500,
-                fontFamily: 'var(--font-gilroy)'
-              }}
-            >
-              Classrooms
-            </Typography>
-          </Button>
-
-          <Button
-            startIcon={
-              <Badge color="error" badgeContent={pendingRequests} invisible={pendingRequests === 0} sx={{ '& .MuiBadge-badge': { fontWeight: 600, fontSize: 13, minWidth: 20, height: 20 } }}>
-                <PeopleIcon />
-              </Badge>
-            }
-            onClick={() => router.push('/student-requests')}
-            sx={{
-              justifyContent: 'flex-start',
               color: '#64748b',
+              bgcolor: 'transparent',
               borderRadius: '8px',
               py: { xs: 1, md: 1.2 },
               px: { xs: 1.2, md: 1.7 },
@@ -770,16 +923,19 @@ export default function ReportsPage() {
                 fontFamily: 'var(--font-gilroy)'
               }}
             >
-              Student Requests
+              Classrooms
             </Typography>
-          </Button>
-
-          <Button
-            startIcon={<DescriptionIcon />}
+          </Button>          <Button
+            startIcon={
+              <Badge color="error" badgeContent={pendingRequests} invisible={pendingRequests === 0} sx={{ '& .MuiBadge-badge': { fontWeight: 600, fontSize: 13, minWidth: 20, height: 20 } }}>
+                <PeopleIcon />
+              </Badge>
+            }
+            onClick={() => router.push('/student-requests')}
             sx={{
               justifyContent: 'flex-start',
-              color: '#0066cc',
-              bgcolor: 'rgba(0,102,204,0.08)',
+              color: '#64748b',
+              bgcolor: 'transparent',
               borderRadius: '8px',
               py: { xs: 1, md: 1.2 },
               px: { xs: 1.2, md: 1.7 },
@@ -787,7 +943,73 @@ export default function ReportsPage() {
               width: '100%',
               fontWeight: 500,
               fontSize: { xs: '1rem', md: '1.05rem' },
-              '&:hover': { bgcolor: 'rgba(0,102,204,0.12)' },
+              '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+              '& .MuiButton-startIcon': {
+                margin: 0,
+                mr: { xs: 0, md: 1.5 },
+                minWidth: { xs: 22, md: 'auto' }
+              }
+            }}
+          >              <Typography
+                sx={{
+                  display: { xs: 'none', md: 'block' },
+                  fontWeight: 500,
+                  fontFamily: 'var(--font-gilroy)',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                Student Requests
+              </Typography>
+          </Button>
+
+          <Button
+            startIcon={<DescriptionIcon />}
+            sx={{
+              justifyContent: 'flex-start',
+              color: '#334eac',
+              bgcolor: 'rgba(51, 78, 172, 0.07)',
+              borderRadius: '8px',
+              py: { xs: 1, md: 1.2 },
+              px: { xs: 1.2, md: 1.7 },
+              minWidth: 0,
+              width: '100%',
+              fontWeight: 500,
+              fontSize: { xs: '1rem', md: '1.05rem' },
+              '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.13)' },
+              '& .MuiButton-startIcon': { 
+                margin: 0,
+                mr: { xs: 0, md: 1.5 },
+                minWidth: { xs: 22, md: 'auto' }
+              }
+            }}          >            <Typography
+              sx={{
+                display: { xs: 'none', md: 'block' },
+                fontWeight: 500,
+                fontFamily: 'var(--font-gilroy)',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              Reports
+            </Typography>
+          </Button>
+        </Box>
+        
+        {/* Bottom Navigation Items */}
+        <Box sx={{ mt: 'auto', display: 'flex', flexDirection: 'column', gap: 1, px: 1 }}>
+          <Button
+            startIcon={<SettingsIcon />}
+            onClick={() => router.push('/settings')}
+            sx={{
+              justifyContent: 'flex-start',
+              color: '#64748b',
+              borderRadius: '8px',
+              py: { xs: 1, md: 1.2 },
+              px: { xs: 1.2, md: 1.7 },
+              minWidth: 0,
+              width: '100%',
+              fontWeight: 500,
+              fontSize: { xs: '1rem', md: '1.05rem' },
+              '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
               '& .MuiButton-startIcon': { 
                 margin: 0,
                 mr: { xs: 0, md: 1.5 },
@@ -801,75 +1023,43 @@ export default function ReportsPage() {
                 fontFamily: 'var(--font-gilroy)'
               }}
             >
-              Reports
+              Settings
             </Typography>
           </Button>
-
-          {/* Bottom Navigation Items */}
-          <Box sx={{ mt: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-            <Button
-              startIcon={<SettingsIcon />}
+          
+          <Button
+            onClick={handleLogout}
+            startIcon={<LogoutIcon />}
+            sx={{
+              justifyContent: 'flex-start',
+              color: '#ea4335',
+              borderRadius: '8px',
+              py: { xs: 1, md: 1.2 },
+              px: { xs: 1.2, md: 1.7 },
+              minWidth: 0,
+              width: '100%',
+              fontWeight: 500,
+              fontSize: { xs: '0.97rem', md: '1.01rem' },
+              background: 'none',
+              '&:hover': { bgcolor: '#fbe9e7' },
+              '& .MuiButton-startIcon': { 
+                margin: 0,
+                mr: { xs: 0, md: 1.5 },
+                minWidth: { xs: 22, md: 'auto' }
+              }
+            }}
+          >            <Typography
               sx={{
-                justifyContent: 'flex-start',
-                color: '#64748b',
-                borderRadius: '8px',
-                py: { xs: 1, md: 1.2 },
-                px: { xs: 1.2, md: 1.7 },
-                minWidth: 0,
-                width: '100%',
+                display: { xs: 'none', md: 'block' },
                 fontWeight: 500,
-                fontSize: { xs: '1rem', md: '1.05rem' },
-                '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
-                '& .MuiButton-startIcon': { 
-                  margin: 0,
-                  mr: { xs: 0, md: 1.5 },
-                  minWidth: { xs: 22, md: 'auto' }
-                }
+                fontFamily: 'var(--font-gilroy)'
               }}
-            >              <Typography
-                sx={{
-                  display: { xs: 'none', md: 'block' },
-                  fontWeight: 500,
-                  fontFamily: 'var(--font-gilroy)'
-                }}
-              >
-                Settings
-              </Typography>
-            </Button>
-
-            <Button
-              onClick={handleLogout}
-              startIcon={<LogoutIcon />}
-              sx={{
-                justifyContent: 'flex-start',
-                color: '#64748b',
-                borderRadius: '8px',
-                py: { xs: 1, md: 1.2 },
-                px: { xs: 1.2, md: 1.7 },
-                minWidth: 0,
-                width: '100%',
-                fontWeight: 500,
-                fontSize: { xs: '1rem', md: '1.05rem' },
-                '&:hover': { bgcolor: 'rgba(0,0,0,0.04)' },
-                '& .MuiButton-startIcon': { 
-                  margin: 0,
-                  mr: { xs: 0, md: 1.5 },
-                  minWidth: { xs: 22, md: 'auto' }
-                }
-              }}
-            >              <Typography
-                sx={{
-                  display: { xs: 'none', md: 'block' },
-                  fontWeight: 500,
-                  fontFamily: 'var(--font-gilroy)'
-                }}
-              >
-                Sign Out
-              </Typography>
-            </Button>
-          </Box>
+            >
+              Sign Out
+            </Typography>
+          </Button>
         </Box>
-      </Box>      {/* Main Content */}      <Box sx={{ 
+      </Box>{/* Main Content */}      <Box sx={{ 
         flexGrow: 1, 
         ml: { xs: '70px', md: '220px' }, 
         p: { xs: 1.25, sm: 2, md: 4 }, 
@@ -1310,12 +1500,8 @@ export default function ReportsPage() {
           }}>
             <Typography sx={{ color: '#64748b', mb: 1, fontSize: '0.75rem', fontFamily: 'var(--font-nunito)' }}>
               Average Attendance
-            </Typography>
-            <Typography sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
+            </Typography>            <Typography sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
               {averageAttendance}%
-            </Typography>
-            <Typography color={attendanceChange >= 0 ? "success.main" : "error.main"} sx={{ mt: 0.5, fontSize: { xs: '0.75rem', sm: '0.95rem' }, fontWeight: 500, fontFamily: 'var(--font-nunito)' }}>
-              {attendanceChange >= 0 ? '+' : ''}{attendanceChange}% from last month
             </Typography>
           </Paper>
 
@@ -1328,12 +1514,8 @@ export default function ReportsPage() {
           }}>
             <Typography sx={{ color: '#64748b', mb: 0.5, fontSize: '0.75rem', fontFamily: 'var(--font-nunito)' }}>
               Total Students
-            </Typography>
-            <Typography sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
+            </Typography>            <Typography sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
               {totalStudents}
-            </Typography>
-            <Typography color={studentsChange >= 0 ? "success.main" : "error.main"} sx={{ mt: 0.5, fontSize: { xs: '0.75rem', sm: '0.95rem' }, fontWeight: 500, fontFamily: 'var(--font-nunito)' }}>
-              {studentsChange >= 0 ? '+' : ''}{studentsChange}% from last month
             </Typography>
           </Paper>
 
@@ -1346,12 +1528,8 @@ export default function ReportsPage() {
           }}>
             <Typography sx={{ color: '#64748b', mb: 0.5, fontSize: '0.75rem', fontFamily: 'var(--font-nunito)' }}>
               Total Classes
-            </Typography>
-            <Typography sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
+            </Typography>            <Typography sx={{ fontSize: { xs: '1.25rem', sm: '1.5rem' }, fontWeight: 600, color: '#1e293b', fontFamily: 'var(--font-gilroy)' }}>
               {totalClasses}
-            </Typography>
-            <Typography color={classesChange >= 0 ? "success.main" : "error.main"} sx={{ mt: 0.5, fontSize: { xs: '0.75rem', sm: '0.95rem' }, fontWeight: 500, fontFamily: 'var(--font-nunito)' }}>
-              {classesChange >= 0 ? '+' : ''}{classesChange}% from last month
             </Typography>
           </Paper>
         </Box>        {/* Status Distribution Chart */}
@@ -1488,66 +1666,7 @@ export default function ReportsPage() {
                   </AreaChart>
                 </ResponsiveContainer>
               )}
-            </Box>
-          </Paper>
-
-          {/* Subject Distribution Chart */}          <Paper sx={{ 
-            p: { xs: 2, sm: 3 }, 
-            borderRadius: '10px', 
-            border: '1px solid #e5e7eb', 
-            bgcolor: 'rgba(255,255,255,0.96)',
-            order: { xs: -1, md: 0 }, // Show before area chart on mobile
-            mb: { xs: 3, md: 0 }, // Add margin below on mobile
-            mt: { xs: 0, md: 0 },
-            maxWidth: '100%'
-          }}>
-            <Typography variant="h6" sx={{ 
-              fontWeight: 600, 
-              color: '#1e293b', 
-              mb: { xs: 1, sm: 2 },
-              fontSize: { xs: '1rem', sm: '1.25rem' }
-            }}>
-              Subject Distribution
-            </Typography>            <Box sx={{ 
-              height: { xs: 200, sm: 300 }, 
-              width: '100%',
-              mt: { xs: 1, sm: 0 }
-            }}>
-              {isClient && (
-                <ResponsiveContainer width="99%" height="100%">
-                  <PieChart margin={{ top: 0, right: 0, bottom: 5, left: 0 }}>
-                    <Pie
-                      data={subjectData}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }: { name: string, percent: number }) => {
-                        // Use shorter names for small spaces
-                        const displayName = name.length > 8 ? name.substring(0, 8) + '...' : name;
-                        return `${displayName} ${(percent * 100).toFixed(0)}%`;
-                      }}
-                      outerRadius={60}
-                      fill="#8884d8"
-                      dataKey="students"
-                    >
-                      {subjectData.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <RechartsTooltip 
-                      contentStyle={{ 
-                        fontSize: '0.875rem',
-                        padding: '8px',
-                        borderRadius: '4px',
-                        boxShadow: '0px 3px 8px rgba(0, 0, 0, 0.12)'
-                      }} 
-                      itemStyle={{ padding: '2px 0' }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
-            </Box>
-          </Paper>
+            </Box>          </Paper>
         </Box>        {/* Download Dialog - optimized for mobile and tablet */}
         <Dialog 
           open={downloadDialogOpen} 
@@ -1642,8 +1761,7 @@ export default function ReportsPage() {
                     color: 'rgba(100,116,139,0.7)',
                     fontSize: { xs: '0.9rem', sm: '1rem' },
                     flexShrink: 0
-                  }} />
-                  <input
+                  }} />                  <input
                     type="date"
                     value={selectedDate}
                     onChange={handleDateChange}
@@ -1654,7 +1772,8 @@ export default function ReportsPage() {
                       fontSize: '0.85rem',
                       width: '100%',
                       fontFamily: 'var(--font-nunito)',
-                      color: '#334155'
+                      color: '#334155',
+                      backgroundColor: '#ffffff'
                     }}
                   />
                 </Box>
@@ -1686,8 +1805,7 @@ export default function ReportsPage() {
                         color: 'rgba(100,116,139,0.7)',
                         fontSize: '0.9rem',
                         flexShrink: 0
-                      }} />
-                      <input
+                      }} />                      <input
                         type="date"
                         value={dateRange.start}
                         onChange={e => handleRangeChange('start', e.target.value)}
@@ -1698,7 +1816,8 @@ export default function ReportsPage() {
                           fontSize: '0.85rem',
                           width: '100%',
                           fontFamily: 'var(--font-nunito)',
-                          color: '#334155'
+                          color: '#334155',
+                          backgroundColor: '#ffffff'
                         }}
                       />
                     </Box>
@@ -1722,8 +1841,7 @@ export default function ReportsPage() {
                         color: 'rgba(100,116,139,0.7)',
                         fontSize: '0.9rem',
                         flexShrink: 0
-                      }} />
-                      <input
+                      }} />                      <input
                         type="date"
                         value={dateRange.end}
                         onChange={e => handleRangeChange('end', e.target.value)}
@@ -1734,7 +1852,8 @@ export default function ReportsPage() {
                           fontSize: '0.85rem',
                           width: '100%',
                           fontFamily: 'var(--font-nunito)',
-                          color: '#334155'
+                          color: '#334155',
+                          backgroundColor: '#ffffff'
                         }}
                       />
                     </Box>

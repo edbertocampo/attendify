@@ -2,8 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { db } from "../../../lib/firebase";
+import { auth, db } from "../../../lib/firebase";
 import { collection, getDocs, query, where, updateDoc, doc, deleteDoc, addDoc, serverTimestamp, getDoc, Timestamp } from "firebase/firestore";
+import { signOut } from "firebase/auth";
+import { getAvatarStyles, getInitials } from "../../../lib/avatarUtils";
 import { 
   Box, Typography, IconButton, Table, TableBody, TableCell, 
   TableContainer, TableHead, TableRow, Paper, Tooltip, CircularProgress, 
@@ -119,6 +121,19 @@ const ClassroomPage = () => {
   const [bulkAbsentLoading, setBulkAbsentLoading] = useState(false);
   const [bulkAbsentError, setBulkAbsentError] = useState<string>("");
   const [bulkAbsentSelected, setBulkAbsentSelected] = useState<string[]>([]); // student ids
+
+  // Add effect to check authentication status
+  useEffect(() => {
+    const unsubscribe = auth.onAuthStateChanged((user) => {
+      if (!user) {
+        console.log("User not authenticated, redirecting to login page");
+        router.push('/login');
+      }
+    });
+
+    // Clean up the subscription
+    return () => unsubscribe();
+  }, [router]);
 
   useEffect(() => {
     if (!classCode) return;
@@ -269,8 +284,7 @@ const ClassroomPage = () => {
               lastAttendanceString = datePart + statusPart;
             }
           }
-          
-          // Get user information using studentAuthId (Firebase Auth UID)
+            // Get user information using studentAuthId (Firebase Auth UID)
           const userData = usersMap.get(studentAuthId); 
             return {
             id: studentDocId, // Student document ID
@@ -279,13 +293,14 @@ const ClassroomPage = () => {
             statusId: studentDocData.statusId || "1", // Default to "Enrolled"
             email: userData?.email || "No email provided",
             lastAttendance: lastAttendanceString,
-            profileImage: studentDocData.profileImage || "",
+            profileImage: userData?.profileImage || studentDocData.profileImage || "",
             attendancePercentage: Math.round(attendancePercentage),
             absenceCount: currentAbsenceCount,
             selected: false
           };
-        });
-
+        });        // Log information about student profile images for debugging
+        console.log("Student profile images:", studentsData.map(s => ({name: s.fullName, profileImage: s.profileImage})));
+        
         setStudents(studentsData);
       } catch (error) {
         console.error("Error fetching data:", error);
@@ -303,9 +318,18 @@ const ClassroomPage = () => {
     setSnackbarSeverity(severity);
     setSnackbarOpen(true);
   };
-
   const handleCloseSnackbar = () => {
     setSnackbarOpen(false);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await signOut(auth);
+      router.push("/login");
+    } catch (error) {
+      console.error("Error signing out:", error);
+      showSnackbar("Failed to sign out", "error");
+    }
   };
 
   const handleConfirmAction = () => {
@@ -590,11 +614,20 @@ const ClassroomPage = () => {
       setCalendarLoading(false);
     }
   };
-
   const handleCloseCalendar = () => {
     setCalendarModalOpen(false);
     setCalendarStudent(null);
     setCalendarEntries([]);
+  };
+
+  // Handle back button click with authentication check
+  const handleBack = () => {
+    // Check if user is authenticated before navigating back
+    if (auth.currentUser) {
+      router.push('/dashboard/instructor'); // Navigate to instructor dashboard
+    } else {
+      router.push('/login'); // Redirect to login if not authenticated
+    }
   };
 
   // Filter and sort students for display
@@ -786,11 +819,10 @@ const ClassroomPage = () => {
           backdropFilter: "blur(10px)",
           borderBottom: "1px solid rgba(0, 0, 0, 0.05)",
         }}
-      >
-        <Box sx={{ display: "flex", alignItems: "center" }}>
+      >        <Box sx={{ display: "flex", alignItems: "center" }}>
           <Tooltip title="Back to Dashboard" arrow>
             <IconButton 
-              onClick={() => window.history.back()} 
+              onClick={handleBack} 
               sx={{ 
                 mr: 1.5, 
                 color: "#334eac", 
@@ -842,10 +874,9 @@ const ClassroomPage = () => {
             >
               <RefreshIcon />
             </IconButton>
-          </Tooltip>
-          <Tooltip title="Logout" arrow>
+          </Tooltip>          <Tooltip title="Logout" arrow>
             <IconButton 
-              onClick={() => alert("Logging out...")} 
+              onClick={handleLogout} 
               sx={{ 
                 color: "#64748b", 
                 '&:hover': { 
@@ -1459,20 +1490,12 @@ const ClassroomPage = () => {
                                   }}
                                 />
                               </Tooltip>
-                            ) : null
-                          }
-                        >
-                          <Avatar 
-                            src={student.profileImage || undefined} 
-                            alt={student.fullName.charAt(0)}
-                            sx={{ 
-                              width: 38, 
-                              height: 38, 
-                              mr: 1.5,
-                              bgcolor: student.profileImage ? undefined : `#${Math.floor(Math.random()*16777215).toString(16)}`
-                            }}
+                            ) : null                          }                        >                          <Avatar 
+                            src={student.profileImage || undefined}
+                            alt={student.fullName}
+                            sx={getAvatarStyles(student.fullName, !!student.profileImage, 'medium')}
                           >
-                            {student.fullName.charAt(0)}
+                            {getInitials(student.fullName)}
                           </Avatar>
                         </Badge>
                         <Box>
@@ -1781,17 +1804,14 @@ const ClassroomPage = () => {
             >
               <CloseIcon />
             </IconButton>
-            
-            <Box sx={{ display: 'flex', alignItems: 'center', mb: 4, width: '100%' }}>
-              <Avatar
-                sx={{ 
-                  bgcolor: '#334eac', 
-                  mr: 2,
-                  width: 44,
-                  height: 44
+              <Box sx={{ display: 'flex', alignItems: 'center', mb: 4, width: '100%' }}>              <Avatar
+                src={calendarStudent?.profileImage || undefined}
+                sx={{
+                  ...getAvatarStyles(calendarStudent?.fullName || '', !!calendarStudent?.profileImage, 'large'),
+                  mr: 2 // Override the margin to be larger for the calendar view
                 }}
               >
-                {calendarStudent?.fullName?.charAt(0) || 'A'}
+                {getInitials(calendarStudent?.fullName || 'A')}
               </Avatar>
               <Box>
                 <Typography 
@@ -1906,13 +1926,23 @@ const ClassroomPage = () => {
                 label="Select All"
               />
             </Box>
-            <Box sx={{ maxHeight: 260, overflowY: 'auto', mb: 1 }}>
-              {students.filter(s => s.statusId === "1").map(student => (
-                <FormControlLabel
-                  key={student.id}
-                  control={<Checkbox checked={bulkAbsentSelected.includes(student.id)} onChange={() => handleBulkAbsentToggle(student.id)} />}
-                  label={student.fullName}
-                />
+            <Box sx={{ maxHeight: 260, overflowY: 'auto', mb: 1 }}>              {students.filter(s => s.statusId === "1").map(student => (
+                <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }} key={student.id}>
+                  <FormControlLabel
+                    control={<Checkbox checked={bulkAbsentSelected.includes(student.id)} onChange={() => handleBulkAbsentToggle(student.id)} />}
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center' }}>                        <Avatar 
+                          src={student.profileImage || undefined}
+                          alt={student.fullName}
+                          sx={getAvatarStyles(student.fullName, !!student.profileImage, 'small')}
+                        >
+                          {getInitials(student.fullName)}
+                        </Avatar>
+                        <Typography variant="body2">{student.fullName}</Typography>
+                      </Box>
+                    }
+                  />
+                </Box>
               ))}
             </Box>
             {bulkAbsentError && (

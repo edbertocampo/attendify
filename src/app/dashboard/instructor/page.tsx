@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Box, Paper, Typography, Button, TextField, AppBar, Toolbar, IconButton, Grid, Container, Modal, Backdrop, FormControl, InputLabel, CircularProgress } from "@mui/material";
+import { Box, Paper, Typography, Button, TextField, AppBar, Toolbar, IconButton, Grid, Container, Modal, Backdrop, FormControl, InputLabel, CircularProgress, Avatar } from "@mui/material";
 import { useRouter } from "next/navigation";
 import { auth, db } from "../../../lib/firebase";
 import { signOut, onAuthStateChanged } from "firebase/auth";
-import { collection, addDoc, query, where, getDocs, doc, updateDoc, onSnapshot } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, doc, updateDoc, onSnapshot, getDoc } from "firebase/firestore";
+import { getAvatarStyles, getInitials } from "../../../lib/avatarUtils";
 import AddIcon from "@mui/icons-material/Add";
 import LogoutIcon from "@mui/icons-material/Logout";
 import Tooltip from "@mui/material/Tooltip";
@@ -39,6 +40,8 @@ export default function InstructorDashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [navigating, setNavigating] = useState(false);
   const [classroomName, setClassroomName] = useState("");
+  const [userFullName, setUserFullName] = useState("");
+  const [userProfileImage, setUserProfileImage] = useState<string | null>(null);
   const [description, setDescription] = useState("");
   const [createdClassroomId, setCreatedClassroomId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +72,8 @@ export default function InstructorDashboard() {
   const [snackbarMessage, setSnackbarMessage] = useState("");
   const [snackbarSeverity, setSnackbarSeverity] = useState<"success" | "error" | "info" | "warning">("success");
   const [copiedClassId, setCopiedClassId] = useState<string | null>(null);
+  // Add this near the beginning of your component where other state variables are declared
+  const [activePage, setActivePage] = useState('instructor');
 
   // Add this useEffect to handle client-side initialization
   useEffect(() => {
@@ -161,38 +166,65 @@ export default function InstructorDashboard() {
   // Add function to fetch attendance statistics
   const fetchAttendanceStats = async () => {
     try {
+      if (!userId) return;
+      
       const today = new Date();
       today.setHours(0, 0, 0, 0);
-
-      const attendanceQuery = query(
-        collection(db, "attendance"),
-        where("timestamp", ">=", today)
+      
+      // First, get all classroom IDs belonging to this instructor
+      const classroomsQuery = query(
+        collection(db, "classrooms"),
+        where("createdBy", "==", userId)
       );
       
-      const attendanceSnapshot = await getDocs(attendanceQuery);
+      const classroomsSnapshot = await getDocs(classroomsQuery);
+      const instructorClassroomIds = classroomsSnapshot.docs.map(doc => doc.id);
+      
+      // If instructor has no classrooms, return empty stats
+      if (instructorClassroomIds.length === 0) {
+        return;
+      }
+      
       const stats = {
         present: 0,
         late: 0,
         excused: 0,
         absent: 0
       };
-
-      attendanceSnapshot.forEach((doc) => {
-        const data = doc.data();
-        if (data.isLate) {
-          // Check isLate flag first to properly count late attendance
-          stats.late++;
-        }
-        else if (data.status === 'present') {
-          stats.present++;
-        }
-        else if (data.status === 'excused') {
-          stats.excused++;
-        }
-        else {
-          stats.absent++;
-        }
-      });
+      
+      // Firestore 'in' queries support up to 10 items, so split into chunks if needed
+      const chunks: string[][] = [];
+      for (let i = 0; i < instructorClassroomIds.length; i += 10) {
+        chunks.push(instructorClassroomIds.slice(i, i + 10));
+      }
+      
+      // Process each chunk of classroom IDs
+      for (const chunk of chunks) {
+        const attendanceQuery = query(
+          collection(db, "attendance"),
+          where("timestamp", ">=", today),
+          where("classCode", "in", chunk)
+        );
+        
+        const attendanceSnapshot = await getDocs(attendanceQuery);
+        
+        attendanceSnapshot.forEach((doc) => {
+          const data = doc.data();
+          if (data.isLate) {
+            // Check isLate flag first to properly count late attendance
+            stats.late++;
+          }
+          else if (data.status === 'present') {
+            stats.present++;
+          }
+          else if (data.status === 'excused') {
+            stats.excused++;
+          }
+          else {
+            stats.absent++;
+          }
+        });
+      }
 
       setAttendanceStats(stats);
     } catch (error) {
@@ -258,6 +290,20 @@ export default function InstructorDashboard() {
   };
 
   // Update the authentication useEffect
+  const fetchUserData = async (userId: string) => {
+    try {
+      // Fetch user data from Firestore
+      const userDoc = await getDoc(doc(db, "users", userId));
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        setUserFullName(userData.fullName || "Instructor");
+        setUserProfileImage(userData.profileImage || null);
+      }
+    } catch (error) {
+      console.error("Error fetching user data:", error);
+    }
+  };
+
   useEffect(() => {
     if (!isClient) return; // Only run auth check on client
 
@@ -266,6 +312,7 @@ export default function InstructorDashboard() {
         router.push("/login");
       } else {
         setUserId(user.uid);
+        await fetchUserData(user.uid);
         await migrateExistingClassrooms(user.uid); // Add migration step
         fetchClassrooms(user.uid);
         fetchAttendanceStats(); // Add this line
@@ -441,6 +488,7 @@ export default function InstructorDashboard() {
       if (editMode && currentClassroomId) {
         // Update existing classroom
         const classroomRef = doc(db, "classrooms", currentClassroomId);
+        // Only update the fields from classroomData, preserving createdBy field
         await updateDoc(classroomRef, classroomData);
       } else {
         // Create new classroom
@@ -517,6 +565,23 @@ export default function InstructorDashboard() {
     }
   };
 
+  // Update useEffect to set the active page on component mount
+  useEffect(() => {
+    if (!isClient) return;
+    
+    // Set the active page based on the current pathname
+    const path = window.location.pathname;
+    if (path.includes('/dashboard/instructor')) {
+      setActivePage('instructor');
+    } else if (path.includes('/student-requests')) {
+      setActivePage('student-requests');
+    } else if (path.includes('/dashboard/reports')) {
+      setActivePage('reports');
+    } else if (path.includes('/settings')) {
+      setActivePage('settings');
+    }
+  }, [isClient]);
+
   return (
     <ClientSideWrapper>
       {isLoading && <LoadingOverlay isLoading={isLoading} message="Loading dashboard..." />}
@@ -569,10 +634,14 @@ export default function InstructorDashboard() {
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1 }}>
             <Button
               startIcon={<HomeIcon />}
+              onClick={() => {
+                setActivePage('instructor');
+                router.push('/dashboard/instructor');
+              }}
               sx={{
                 justifyContent: 'flex-start',
-                color: '#334eac',
-                bgcolor: 'rgba(51, 78, 172, 0.07)',
+                color: activePage === 'instructor' ? '#334eac' : '#64748b',
+                bgcolor: activePage === 'instructor' ? 'rgba(51, 78, 172, 0.07)' : 'transparent',
                 borderRadius: '8px',
                 py: { xs: 1, md: 1.2 },
                 px: { xs: 1.2, md: 1.7 },
@@ -580,7 +649,7 @@ export default function InstructorDashboard() {
                 width: '100%',
                 fontWeight: 500,
                 fontSize: { xs: '1rem', md: '1.05rem' },
-                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.13)' },
+                '&:hover': { bgcolor: activePage === 'instructor' ? 'rgba(51, 78, 172, 0.13)' : 'rgba(51, 78, 172, 0.07)' },
                 '& .MuiButton-startIcon': {
                   margin: 0,
                   mr: { xs: 0, md: 1.5 },
@@ -601,14 +670,18 @@ export default function InstructorDashboard() {
 
             <Button
               startIcon={
-                <Badge color="error" badgeContent={pendingRequests} invisible={false} sx={{ '& .MuiBadge-badge': { fontWeight: 600, fontSize: 13, minWidth: 20, height: 20 } }}>
+                <Badge color="error" badgeContent={pendingRequests} invisible={pendingRequests === 0} sx={{ '& .MuiBadge-badge': { fontWeight: 600, fontSize: 13, minWidth: 20, height: 20 } }}>
                   <PeopleIcon />
                 </Badge>
               }
-              onClick={() => router.push('/student-requests')}
+              onClick={() => {
+                setActivePage('student-requests');
+                router.push('/student-requests');
+              }}
               sx={{
                 justifyContent: 'flex-start',
-                color: '#64748b',
+                color: activePage === 'student-requests' ? '#334eac' : '#64748b',
+                bgcolor: activePage === 'student-requests' ? 'rgba(51, 78, 172, 0.07)' : 'transparent',
                 borderRadius: '8px',
                 py: { xs: 1, md: 1.2 },
                 px: { xs: 1.2, md: 1.7 },
@@ -616,7 +689,7 @@ export default function InstructorDashboard() {
                 width: '100%',
                 fontWeight: 500,
                 fontSize: { xs: '1rem', md: '1.05rem' },
-                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+                '&:hover': { bgcolor: activePage === 'student-requests' ? 'rgba(51, 78, 172, 0.13)' : 'rgba(51, 78, 172, 0.07)' },
                 '& .MuiButton-startIcon': {
                   margin: 0,
                   mr: { xs: 0, md: 1.5 },
@@ -628,7 +701,8 @@ export default function InstructorDashboard() {
                 sx={{
                   display: { xs: 'none', md: 'block' },
                   fontWeight: 500,
-                  fontFamily: 'var(--font-gilroy)'
+                  fontFamily: 'var(--font-gilroy)',
+                  whiteSpace: 'nowrap'
                 }}
               >
                 Student Requests
@@ -637,10 +711,14 @@ export default function InstructorDashboard() {
 
             <Button
               startIcon={<DescriptionIcon />}
-              onClick={() => router.push('/dashboard/reports')}
+              onClick={() => {
+                setActivePage('reports');
+                router.push('/dashboard/reports');
+              }}
               sx={{
                 justifyContent: 'flex-start',
-                color: '#64748b',
+                color: activePage === 'reports' ? '#334eac' : '#64748b',
+                bgcolor: activePage === 'reports' ? 'rgba(51, 78, 172, 0.07)' : 'transparent',
                 borderRadius: '8px',
                 py: { xs: 1, md: 1.2 },
                 px: { xs: 1.2, md: 1.7 },
@@ -648,7 +726,50 @@ export default function InstructorDashboard() {
                 width: '100%',
                 fontWeight: 500,
                 fontSize: { xs: '1rem', md: '1.05rem' },
-                '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
+                '&:hover': { bgcolor: activePage === 'reports' ? 'rgba(51, 78, 172, 0.13)' : 'rgba(51, 78, 172, 0.07)' },
+                '& .MuiButton-startIcon': {
+                  margin: 0,
+                  mr: { xs: 0, md: 1.5 },
+                  minWidth: { xs: 22, md: 'auto' }
+                }
+              }}
+            >
+              <Typography
+                sx={{
+                  display: { xs: 'none', md: 'block' },
+                  fontWeight: 500,
+                  fontFamily: 'var(--font-gilroy)',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                Reports
+              </Typography>
+            </Button>
+          </Box>
+          
+          {/* Spacer to push bottom items down */}
+          <Box sx={{ flexGrow: 1 }} />
+          
+          {/* Bottom Navigation Items */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, px: 1, mt: 2 }}>
+            <Button
+              startIcon={<SettingsIcon />}
+              onClick={() => {
+                setActivePage('settings');
+                router.push('/settings');
+              }}
+              sx={{
+                justifyContent: 'flex-start',
+                color: activePage === 'settings' ? '#334eac' : '#64748b',
+                bgcolor: activePage === 'settings' ? 'rgba(51, 78, 172, 0.07)' : 'transparent',
+                borderRadius: '8px',
+                py: { xs: 1, md: 1.2 },
+                px: { xs: 1.2, md: 1.7 },
+                minWidth: 0,
+                width: '100%',
+                fontWeight: 500,
+                fontSize: { xs: '1rem', md: '1.05rem' },
+                '&:hover': { bgcolor: activePage === 'settings' ? 'rgba(51, 78, 172, 0.13)' : 'rgba(51, 78, 172, 0.07)' },
                 '& .MuiButton-startIcon': {
                   margin: 0,
                   mr: { xs: 0, md: 1.5 },
@@ -663,77 +784,43 @@ export default function InstructorDashboard() {
                   fontFamily: 'var(--font-gilroy)'
                 }}
               >
-                Reports
+                Settings
               </Typography>
             </Button>
 
-            {/* Bottom Navigation Items */}
-            <Box sx={{ mt: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
-              <Button
-                startIcon={<SettingsIcon />}
+            <Button
+              onClick={handleLogout}
+              startIcon={<LogoutIcon />}
+              sx={{
+                justifyContent: 'flex-start',
+                color: '#ea4335',
+                borderRadius: '8px',
+                py: { xs: 1, md: 1.2 },
+                px: { xs: 1.2, md: 1.7 },
+                minWidth: 0,
+                width: '100%',
+                fontWeight: 500,
+                fontSize: { xs: '0.97rem', md: '1.01rem' },
+                background: 'none',
+                '&:hover': { bgcolor: '#fbe9e7' },
+                '& .MuiButton-startIcon': { 
+                  margin: 0,
+                  mr: { xs: 0, md: 1.5 },
+                  minWidth: { xs: 22, md: 'auto' }
+                }
+              }}
+            >
+              <Typography
                 sx={{
-                  justifyContent: 'flex-start',
-                  color: '#64748b',
-                  borderRadius: '8px',
-                  py: { xs: 1, md: 1.2 },
-                  px: { xs: 1.2, md: 1.7 },
-                  minWidth: 0,
-                  width: '100%',
+                  display: { xs: 'none', md: 'block' },
                   fontWeight: 500,
-                  fontSize: { xs: '1rem', md: '1.05rem' },
-                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
-                  '& .MuiButton-startIcon': {
-                    margin: 0,
-                    mr: { xs: 0, md: 1.5 },
-                    minWidth: { xs: 22, md: 'auto' }
-                  }
+                  fontFamily: 'var(--font-gilroy)'
                 }}
               >
-                <Typography
-                  sx={{
-                    display: { xs: 'none', md: 'block' },
-                    fontWeight: 500,
-                    fontFamily: 'var(--font-gilroy)'
-                  }}
-                >
-                  Settings
-                </Typography>
-              </Button>
-
-              <Button
-                onClick={handleLogout}
-                startIcon={<LogoutIcon />}
-                sx={{
-                  justifyContent: 'flex-start',
-                  color: '#64748b',
-                  borderRadius: '8px',
-                  py: { xs: 1, md: 1.2 },
-                  px: { xs: 1.2, md: 1.7 },
-                  minWidth: 0,
-                  width: '100%',
-                  fontWeight: 500,
-                  fontSize: { xs: '1rem', md: '1.05rem' },
-                  '&:hover': { bgcolor: 'rgba(51, 78, 172, 0.07)' },
-                  '& .MuiButton-startIcon': {
-                    margin: 0,
-                    mr: { xs: 0, md: 1.5 },
-                    minWidth: { xs: 22, md: 'auto' }
-                  }
-                }}
-              >
-                <Typography
-                  sx={{
-                    display: { xs: 'none', md: 'block' },
-                    fontWeight: 500,
-                    fontFamily: 'var(--font-gilroy)'
-                  }}
-                >
-                  Sign Out
-                </Typography>
-              </Button>
-            </Box>
+                Sign Out
+              </Typography>
+            </Button>
           </Box>
-
         </Box>
 
         {/* Main Content */}
